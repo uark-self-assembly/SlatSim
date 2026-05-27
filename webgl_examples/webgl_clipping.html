@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - clipping planes</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+
+		<style>
+
+			.lil-gui {
+				--background-color: #f6f6f61;
+				--text-color: #07aacf;
+				--title-background-color: #efefef;
+				--title-text-color: #07aacf;//#3d3d3d;
+				--widget-color: #eaeaea;
+				--hover-color: #f0f0f0;
+				--focus-color: #fafafa;
+				--number-color: #07aacf;
+				--string-color: #07aacf;
+				--width: 160px;
+				--font-weight: 800;
+
+				--position: absolute;
+				--top: 0px;
+				--left: 2%;
+				--auto-place: false;
+			}
+
+			.container {
+				position: absolute;
+				left: 5px;
+				top: 35px;
+				z-index: 99;
+				min-height: 2rem;
+				width: 160px;
+				padding: 10px;
+				background-color: rgb(255, 255, 255);
+				border-radius: 5px;
+				transform: translate(0%, 0%);
+				cursor: move;
+				user-select: none;
+				opacity: 0.8;
+			}
+
+			#mouse_over_div {
+				position: absolute;
+				left: 190px;
+				top: 35px;
+				z-index: 99;
+				color: #07aacf;
+			}
+
+			#filename_div {
+				position: absolute;
+				left: 5px;
+				top: 5px;
+				z-index: 99;
+				color: #07aacf;
+				padding-top: 2px;
+				padding-bottom: 2px;
+				padding-left: 10px;
+				padding-right: 10px;
+				background-color: rgb(255, 255, 255);
+				border-radius: 5px;
+				opacity: 0.8;
+			}
+		</style>
+	</head>
+	<body>
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+		<div id="filename_div">No File Loaded</div>
+		<div class="container" id="container_div"></div>
+		<div class="container" id="mouse_over_div">Hello world</div>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			//import Stats from 'three/addons/libs/stats.module.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			let camera, scene, renderer, startTime, object, stats;
+
+			const container = document.getElementById("mouse_over_div");//.querySelector(".container");
+        	function onMouseDrag({ movementX, movementY }) {
+				let getContainerStyle = window.getComputedStyle(container);
+				let leftValue = parseInt(getContainerStyle.left);
+				let topValue = parseInt(getContainerStyle.top);
+				container.style.left = `${leftValue + movementX}px`;
+				container.style.top = `${topValue + movementY}px`;
+			}
+			container.addEventListener("mousedown", () => {
+				container.addEventListener("mousemove", onMouseDrag);
+			});
+			document.addEventListener("mouseup", () => {
+				container.removeEventListener("mousemove", onMouseDrag);
+			});
+
+			function postMessage(message) {
+				const container = document.getElementById("mouse_over_div");
+				container.innerHTML = message;
+			}
+
+			init();
+
+			function init() {
+
+				camera = new THREE.PerspectiveCamera( 36, window.innerWidth / window.innerHeight, 0.25, 16 );
+
+				camera.position.set( 0, 1.3, 3 );
+
+				scene = new THREE.Scene();
+
+				// Lights
+
+				scene.add( new THREE.AmbientLight( 0xcccccc ) );
+
+				const spotLight = new THREE.SpotLight( 0xffffff, 60 );
+				spotLight.angle = Math.PI / 5;
+				spotLight.penumbra = 0.2;
+				spotLight.position.set( 2, 3, 3 );
+				spotLight.castShadow = true;
+				spotLight.shadow.camera.near = 3;
+				spotLight.shadow.camera.far = 10;
+				spotLight.shadow.mapSize.width = 1024;
+				spotLight.shadow.mapSize.height = 1024;
+				scene.add( spotLight );
+
+				const dirLight = new THREE.DirectionalLight( 0x55505a, 3 );
+				dirLight.position.set( 0, 3, 0 );
+				dirLight.castShadow = true;
+				dirLight.shadow.camera.near = 1;
+				dirLight.shadow.camera.far = 10;
+
+				dirLight.shadow.camera.right = 1;
+				dirLight.shadow.camera.left = - 1;
+				dirLight.shadow.camera.top	= 1;
+				dirLight.shadow.camera.bottom = - 1;
+
+				dirLight.shadow.mapSize.width = 1024;
+				dirLight.shadow.mapSize.height = 1024;
+				scene.add( dirLight );
+
+				// ***** Clipping planes: *****
+
+				const localPlane = new THREE.Plane( new THREE.Vector3( 0, - 1, 0 ), 0.8 );
+				const globalPlane = new THREE.Plane( new THREE.Vector3( - 1, 0, 0 ), 0.1 );
+
+				// Geometry
+
+				const material = new THREE.MeshPhongMaterial( {
+					color: 0x80ee10,
+					shininess: 100,
+					side: THREE.DoubleSide,
+
+					// ***** Clipping setup (material): *****
+					clippingPlanes: [ localPlane ],
+					clipShadows: true,
+
+					alphaToCoverage: true,
+
+				} );
+
+				const geometry = new THREE.TorusKnotGeometry( 0.4, 0.08, 95, 20 );
+
+				object = new THREE.Mesh( geometry, material );
+				object.castShadow = true;
+				scene.add( object );
+
+				const ground = new THREE.Mesh(
+					new THREE.PlaneGeometry( 9, 9, 1, 1 ),
+					new THREE.MeshPhongMaterial( { color: 0xa0adaf, shininess: 150 } )
+				);
+
+				ground.rotation.x = - Math.PI / 2; // rotates X/Y to X/Z
+				ground.receiveShadow = true;
+				scene.add( ground );
+
+				// Renderer
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				document.body.appendChild( renderer.domElement );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				// ***** Clipping setup (renderer): *****
+				const globalPlanes = [ globalPlane ],
+					Empty = Object.freeze( [] );
+				renderer.clippingPlanes = Empty; // GUI sets it to globalPlanes
+				renderer.localClippingEnabled = true;
+
+				// Stats
+
+				//stats = new Stats();
+				//document.body.appendChild( stats.dom );
+
+				// Controls
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 1, 0 );
+				controls.update();
+
+				// GUI
+
+				let loaded_file_name = 'No File Loaded';
+
+				function handleFileSelect() {
+					let input = document.createElement('input');
+					input.type = 'file';
+					input.onchange = e => {
+					   let file = e.target.files[0];
+					   console.log(file.name);
+					   postMessage(file.name);
+					   loaded_file_name = file.name;
+					   document.getElementById("filename_div").innerHTML = loaded_file_name;
+					   clearGui();
+					   addGuiFolders();
+					}
+					input.click();
+				}
+
+				const propsFile = {
+					'Select File': handleFileSelect,
+				}
+				const propsDrawing = {
+					'View Handles': true,
+					'View Lines': true,
+					'View Domains': true,
+					'View Markers': true,
+					'Highlight Mismatches': true
+				};
+				let propsLayers = {
+					'Layer 0': true,
+					'Layer 1': true,
+				}
+				const propsSpaceVis = {
+					'X Range': '*',
+					'Y Range': '*',
+					'Z Range': '*',
+				};
+				const propsSteps = {
+					'Max Visible Step': 0,
+					'Set Current Step': function() {
+						console.log('Current Step being set...');
+					},
+					'Step': function() {
+						console.log('Single step...');
+					},
+					'Start': function() {
+						console.log('Starting...');
+					},
+					'Stop': function() {
+						console.log('Stopping...');
+					},
+					'Step Speed': 1.0,
+				};
+				const propsReset = {
+					'Reset': function()	{
+						console.log('reset time!');
+						propsLayers = {
+							'Layer 0': true,
+							'Layer 1': true,
+							'Layer 2': true,
+						};
+						clearGui();
+						addGuiFolders();
+					},
+				};
+				const propsMouse = {
+					'Display mouse location info': true,
+				};
+
+				let folderFile, folderDrawingOptions, folderSpaceVis, folderSteps = null;
+
+				//const gui = new GUI({ container: $('#gui') });
+				const gui = new GUI({ container: document.getElementById('container_div') });
+
+				function clearGui() {
+					folderFile.destroy();
+					folderDrawingOptions.destroy();
+					folderSpaceVis.destroy();
+					folderSteps.destroy();
+				}
+
+				function addGuiFolders() {
+					folderFile = gui.addFolder('File');
+					folderFile.add(propsFile, 'Select File');
+					folderFile.close();
+
+					folderDrawingOptions = gui.addFolder('Drawing Options');
+					folderDrawingOptions.add(propsDrawing, 'View Handles').onChange(function (value) {
+						console.log(value);
+					});
+					folderDrawingOptions.add(propsDrawing, 'View Lines').onChange(function (value) {
+						console.log(value);
+					});
+					folderDrawingOptions.add(propsDrawing, 'View Domains').onChange(function (value) {
+						console.log(value);
+					});
+					folderDrawingOptions.add(propsDrawing, 'View Markers').onChange(function (value) {
+						console.log(value);
+					});
+					folderDrawingOptions.add(propsDrawing, 'Highlight Mismatches').onChange(function (value) {
+						console.log(value);
+					});
+					folderDrawingOptions.close();
+
+					folderSpaceVis = gui.addFolder('Space Visibility');
+					folderSpaceVis.add(propsSpaceVis, 'X Range');
+					folderSpaceVis.add(propsSpaceVis, 'Y Range');
+					folderSpaceVis.add(propsSpaceVis, 'Z Range');
+					for (let prop in propsLayers) {
+						folderSpaceVis.add(propsLayers, prop);
+					}
+					folderSpaceVis.close();
+
+					folderSteps = gui.addFolder('Assembly Step');
+					folderSteps.add(propsSteps, 'Max Visible Step');
+					folderSteps.add(propsSteps, 'Set Current Step');
+					folderSteps.add(propsSteps, 'Step');
+					folderSteps.add(propsSteps, 'Start');
+					folderSteps.add(propsSteps, 'Stop');
+					folderSteps.add(propsSteps, 'Step Speed', 1, 100, 1);
+					folderSteps.close();
+
+					gui.add( propsMouse, 'Display mouse location info' );
+				}
+
+				addGuiFolders();
+
+
+				// Start
+				startTime = Date.now();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				const currentTime = Date.now();
+				const time = ( currentTime - startTime ) / 1000;
+
+				object.position.y = 0.8;
+				object.rotation.x = time * 0.5;
+				object.rotation.y = time * 0.2;
+				object.scale.setScalar( Math.cos( time ) * 0.125 + 0.875 );
+
+				//stats.begin();
+				renderer.render( scene, camera );
+				//stats.end();
+
+			}
+
+		</script>
+
+	</body>
+</html>

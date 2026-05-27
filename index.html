@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<!---
+		This page provides a crude viewer for crisscross slat systems.
+		A system (in the form of an XML file) can be dragged and dropped over the "Choose file" button at the top.
+
+		[TODO]
+		- allow reloading of systems without requiring page refresh
+		- mark mismatched/unbound domains
+		- allow transparency of layers
+		- mouseover display of actual coords and slat coords
+
+		--->
+		<title>Crisscross Slat System Viewer</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+
+		<style>
+			.lil-gui {
+				--background-color: #f6f6f61;
+				--text-color: #07aacf;
+				--title-background-color: #efefef;
+				--title-text-color: #07aacf;//#3d3d3d;
+				--widget-color: #eaeaea;
+				--hover-color: #f0f0f0;
+				--focus-color: #fafafa;
+				--number-color: #07aacf;
+				--string-color: #07aacf;
+				--width: 160px;
+				--font-weight: 800;
+
+				--position: absolute;
+				--top: 0px;
+				--left: 2%;
+				--auto-place: false;
+			}
+
+			.container {
+				position: absolute;
+				left: 5px;
+				top: 35px;
+				z-index: 99;
+				min-height: 2rem;
+				width: 160px;
+				padding: 10px;
+				background-color: rgb(255, 255, 255);
+				border-radius: 5px;
+				transform: translate(0%, 0%);
+				cursor: move;
+				user-select: none;
+				opacity: 0.8;
+			}
+
+			#mouse_over_div {
+				position: absolute;
+				left: 190px;
+				top: 35px;
+				width: 200px;
+				z-index: 99;
+				color: #07aacf;
+			}
+
+			#filename_div {
+				position: absolute;
+				left: 5px;
+				top: 5px;
+				z-index: 99;
+				color: #07aacf;
+				padding-top: 2px;
+				padding-bottom: 2px;
+				padding-left: 10px;
+				padding-right: 10px;
+				background-color: rgb(255, 255, 255);
+				border-radius: 5px;
+				opacity: 0.8;
+			}
+		</style>
+
+	</head>
+	<body>
+
+		<div id="filename_div">No File Loaded</div>
+		<div class="container" id="container_div"></div>
+		<div class="container" id="mouse_over_div"><pre id="output"></pre></div>
+
+		<script type="importmap">
+		{
+			"imports": {
+				"three": "./build/three.module.js",
+				"three/addons/": "./jsm/"
+			}
+		}
+	</script>
+
+    <script type="module">
+			import { SlatSystem, SlatType } from './slat_system.mjs';
+
+			import * as THREE from 'three';
+
+			import { OBB } from 'three/addons/math/OBB.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			//import Stats from 'three/addons/libs/stats.module.js';
+
+			let camera, scene, renderer, clock, controls, stats, raycaster, hitbox;
+
+			let objects = [];
+			const mouse = new THREE.Vector2();
+
+			//////////////////////////////////////////////////////////////
+			// Global parameters for drawing slats
+			const base_dim = 14;
+			const domain_radius = 4;
+			const handle_radius = 1;
+			const handle_height = 3;
+			const marker_cube_dim = 10;
+			const mismatch_cube_dim = (domain_radius * 4) + (handle_height * 2);
+			const end_shrinkage = 2;
+			const num_sides_rendered = 6;
+
+			let domain_cylinder, domain_edges, end_domain_cylinder, end_domain_edges, handle_cylinder, marker_cube, marker_material, mismatch_cube, mismatch_material;
+			let slat_system = null;
+			let colored_materials = {};
+			let drawn_slat_types = {};
+
+			let marker_label = null;
+
+			let viewable_layers = [true, true, true];
+			let viewable_x_range = [null, null];
+			let viewable_y_range = [null, null];
+			let viewable_z_range = [null, null];
+
+			let b_display_mouseover = true;
+
+			const b_display_stats = false;
+
+			let b_show_domains = true;
+			let b_show_lines = true;
+			let b_show_handles = true;
+			let b_show_markers = true;
+			let b_show_mismatches = true;
+
+			// The following three values are currently obsolete
+			let b_draw_lines = true;
+			let b_draw_handles = true;
+			let b_draw_markers = true;
+
+			let assembly_max_step = 0;
+			let max_visible_step = 0;
+			let visisble_step_increment = 1;
+
+			const domain_map = {};
+
+			let intervalId = null;
+			let intervalVal = 500;
+			let b_is_playing = false;
+
+			let gui = null;
+
+			const propsFile = {
+				'Load System': handleFileSelect,
+				'Save System': handleSaveSystem,
+			}
+			const propsDrawing = {
+				'View Handles': true,
+				'View Lines': true,
+				'View Domains': true,
+				'View Markers': true,
+				'Highlight Mismatches': true
+			};
+			let propsLayers = {
+				'Layer 0': true,
+			}
+			const propsSpaceVis = {
+				'X Range': '*:*',
+				'Y Range': '*:*',
+				'Z Range': '*:*',
+			};
+			const propsSteps = {
+				'Max Visible Step': 0,
+				'Set Current Step': function() {
+					resetMaxVisStep();
+				},
+				'Step': function() {
+					incrementVisStep();
+				},
+				'Start': function() {
+					startPlay();
+				},
+				'Stop': function() {
+					stopPlay();
+				},
+				'Step Speed': 1.0,
+			};
+			const propsMouse = {
+				'Display mouse location info': true,
+			};
+
+			let folderFile, folderDrawingOptions, folderSpaceVis, folderSteps = null;
+			let max_vis_steps_ctrl, steps_speed_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
+
+			let loaded_file_name = 'No File Loaded';
+
+			// Functions for draggable mouseover window
+			const container = document.getElementById("mouse_over_div");//.querySelector(".container");
+        	function onMouseDrag({ movementX, movementY }) {
+				let getContainerStyle = window.getComputedStyle(container);
+				let leftValue = parseInt(getContainerStyle.left);
+				let topValue = parseInt(getContainerStyle.top);
+				container.style.left = `${leftValue + movementX}px`;
+				container.style.top = `${topValue + movementY}px`;
+			}
+			container.addEventListener("mousedown", () => {
+				container.addEventListener("mousemove", onMouseDrag);
+			});
+			document.addEventListener("mouseup", () => {
+				container.removeEventListener("mousemove", onMouseDrag);
+			});
+
+			function resetScene(b_reset_camera=true) {
+				clearScene(scene);
+				init2(b_reset_camera);
+				document.getElementById('loaded_file_name').innerHTML = 'No file loaded';
+			}
+
+			function createLayerVisProps(min_layer, max_layer) {
+				propsLayers = {}
+				for (let i=min_layer; i<=max_layer; i++) {
+					propsLayers['Layer ' + i] = true;
+				}
+			}
+
+			function getRange(range_str) {
+				let min_range = null;
+				let max_range = null;
+				if ((range_str.length > 0) && (range_str != '*')) {
+					const range_arr = range_str.split(':');
+					if (range_arr[0] != '*') {
+						min_range = parseInt(range_arr[0]);
+					}
+					if (range_arr[1] != '*') {
+						max_range = parseInt(range_arr[1]);
+					}
+				}
+				return [min_range, max_range];
+			}
+
+			function visRangeChange() {
+				const x_range_str = x_range_ctrl.getValue();
+				const y_range_str = y_range_ctrl.getValue();
+				const z_range_str = z_range_ctrl.getValue();
+				viewable_x_range = getRange(x_range_str);
+				viewable_y_range = getRange(y_range_str);
+				viewable_z_range = getRange(z_range_str);
+				//console.log('change!' + x_range_str + ', ' + viewable_x_range + ", " + y_range_str + ', ' + viewable_y_range + ", " + viewable_z_range);
+			}
+
+			function rangeSpeedClick() {
+				const speed = steps_speed_ctrl.getValue();
+
+				intervalVal = 1000 - (10 * speed) + 1;
+				if (speed <= 90) {
+					visisble_step_increment = 1;
+				} else {
+					visisble_step_increment = speed - 90;
+				}
+
+				//console.log('New speed: ' + intervalVal);
+				if (b_is_playing) {
+					stopPlay();
+					startPlay();
+				}
+			}
+
+			function startPlay() {
+				max_visible_step = max_vis_steps_ctrl.getValue();
+				if (max_visible_step > assembly_max_step) {
+					const num_steps = max_visible_step - assembly_max_step;
+					console.log(' About to simulate ' + num_steps + ' steps...');
+					slat_system.simulate_steps(num_steps);
+					console.log(' Simulation complete. Redrawing assembly.');
+					drawSlatSystem();
+					//assembly_max_step = max_visible_step;
+				}
+
+				b_is_playing = true;
+				intervalId = window.setInterval(function(){incrementVisStep()}, intervalVal);
+			}
+
+			function stopPlay() {
+				b_is_playing = false;
+				if (intervalId) {
+					window.clearInterval(intervalId);
+				}
+			}
+
+			function incrementVisStep() {
+				if (max_visible_step < assembly_max_step) {
+					max_visible_step += visisble_step_increment;
+					if (max_visible_step > assembly_max_step) {
+						max_visible_step = assembly_max_step;
+					}
+					//console.log('max visible step: ' + max_visible_step + ", intervalVal: " + intervalVal + ", visisble_step_increment" + visisble_step_increment);
+				} else {
+					stopPlay();
+				}
+				max_vis_steps_ctrl.setValue(max_visible_step);
+			}
+
+			function resetMaxVisStep() {
+				max_visible_step = max_vis_steps_ctrl.getValue();
+			}
+
+			function writeOutputMessage(message) {
+				if ((b_display_mouseover == true) && (message.length > 0)) {
+					document.getElementById('mouse_over_div').style.visibility = 'visible';
+				} else {
+					document.getElementById('mouse_over_div').style.visibility = 'hidden';
+				}
+				document.getElementById('output').textContent = message;
+			}
+
+			function drawSlatSystem() {
+				let system_vals1 = [null, null, null];
+				let system_vals2 = [null, null, null];
+
+				if ((slat_system.seed_assembly != null) && (slat_system.seed_assembly.slats.length > 0)) {
+					 system_vals1 = add_slats_to_scene(slat_system.seed_assembly.slats, slat_system.slat_types);
+				}
+				if ((slat_system.assembly != null) && (slat_system.assembly.slats.length > 0)) {
+					system_vals2 = add_slats_to_scene(slat_system.assembly.slats, slat_system.slat_types);
+				}
+
+				const z_range1 = [system_vals1[0], system_vals1[1]];
+				const z_range2 = [system_vals2[0], system_vals2[1]];
+				const max_step_added = (system_vals1[2] > system_vals2[2]) ? system_vals1[2] : system_vals2[2];
+				if ((max_step_added) && (max_step_added > 0)) {
+					//document.getElementById('playback_controls_span').style.visibility = 'visible';
+					//document.getElementById('no_playback_controls_span').style.visibility = 'hidden';
+					//document.getElementById('tb_max_vis_step').value = max_step_added;
+					max_vis_steps_ctrl.setValue(max_step_added);
+					max_visible_step = max_step_added;
+					assembly_max_step = max_step_added;
+				} else {
+					//document.getElementById('playback_controls_span').style.visibility = 'hidden';
+					//document.getElementById('no_playback_controls_span').style.visibility = 'visible';
+					//document.getElementById('tb_max_vis_step').value = 0;
+					max_vis_steps_ctrl.setValue(0);
+					assembly_max_step = 0;
+				}
+
+				let z_range = [null, null];
+				if (z_range1[0] == null) {
+					z_range[0] = z_range2[0];
+				} else if (z_range2[0] == null) {
+					z_range[0] = z_range1[0];
+				} else {
+					z_range[0] = (z_range1[0] < z_range2[0]) ? z_range1[0] : z_range2[0];
+				}
+
+				if (z_range1[1] == null) {
+					z_range[1] = z_range2[1];
+				} else if (z_range2[1] == null) {
+					z_range[1] = z_range1[1];
+				} else {
+					z_range[1] = (z_range1[1] > z_range2[1]) ? z_range1[1] : z_range2[1];
+				}
+				return z_range;
+			}
+
+			function add_slats_to_scene(slats, slat_types) {
+				let min_z = null;
+				let max_z = null;
+				let max_step_added = 0;
+				for (let i=0; i < slats.length; i++) {
+					const slat_dict = slats[i];
+					const slat_type_name = slat_dict['slat_type_name'];
+					const slat_type = slat_types[slat_type_name];
+					const translation = slat_dict['translation'];
+					const location = new THREE.Vector3(translation[0], translation[1], translation[2]);
+					if ((min_z == null) || (translation[2] < min_z)) {
+						min_z = translation[2];
+					}
+					if ((max_z == null) || (translation[2] > max_z)) {
+						max_z = translation[2];
+					}
+					const step_added = slat_dict['step_added'];
+					if (step_added > max_step_added) {
+						max_step_added = step_added;
+					}
+
+					add_slat_to_scene(scene, objects, slat_type, location, step_added);
+					//console.log('Added slat of length ' + slat_type.blocks.length + ' to scene at translation ' + translation + ' at location:');
+					//console.log(location);
+
+				}
+				return [min_z, max_z, max_step_added];
+
+			}
+
+			function add_slat_to_scene(scene, object_list, slat_type, start_coords, step_added) {
+				// [TODO] This would be the spot to make reuse of drawn slat_type objects
+				/*
+				if (!(slat_type.name in drawn_slat_types)) {
+					drawn_slat_types[slat_type.name] = new DrawnSlatType(slat_type);
+				}
+				const drawn_slat_type = drawn_slat_types[slat_type.name].clone();
+				*/
+
+				const drawn_slat_type = DrawnSlatType.from_slat_type(slat_type);
+
+				drawn_slat_type.translate(start_coords);
+				drawn_slat_type.add_to_scene(scene, object_list, step_added);
+			}
+
+			class DrawnSlatType {
+
+				translate(start_coords) {
+					for (let i=0; i < this.cylinder_objects_list.length; i++) {
+						const object = this.cylinder_objects_list[i];
+						object.position.x += (start_coords.x * base_dim);
+						object.position.y += (start_coords.y * base_dim);
+						object.position.z += (start_coords.z * ((1 * handle_height) + (2 * domain_radius)));
+						object.userData.obb.global_slat_coords = start_coords;
+					}
+					for (let i=0; i < this.line_objects_list.length; i++) {
+						const object = this.line_objects_list[i];
+						 object.position.x +=  (start_coords.x * base_dim);
+						 object.position.y +=  (start_coords.y * base_dim);
+						 object.position.z +=  (start_coords.z * ((1 * handle_height) + (2 * domain_radius)));
+						 object.userData.obb.global_slat_coords = start_coords;
+					}
+				}
+
+				add_to_scene(scene, object_list, step_added) {
+					for (let i=0; i < this.cylinder_objects_list.length; i++) {
+						const object = this.cylinder_objects_list[i];
+						object.userData.obb.step_added = step_added;
+						scene.add(object);
+						object_list.push(object);
+						const global_coords = object.userData.obb.global_slat_coords;
+						const local_coords = object.userData.obb.local_block_coords;
+						const domain_list = object.userData.obb.domain_listing;
+						if (domain_list) {
+							for (let j = 0; j < domain_list.length; j++) {
+								const domain = domain_list[j];
+								const domain_dir = domain[0];
+								const domain_label = domain[1];
+								const dir_add_dict = {'U': [0,0,1], 'D': [0,0,0], 'N': [0,1,0], 'S': [0,0,0], 'E': [1,0,0], 'W': [0,0,0]};
+								//const dir_map = {'U': 'U', 'D': 'U', 'N': 'N', 'S': 'N', 'E': 'E', 'W': 'E'};
+								const opp_dirs = {'U': 'D', 'D': 'U', 'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'};
+								const complements = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'};
+
+								const dir_add = dir_add_dict[domain[0]];
+
+								const domain_map_coords = [global_coords.x + local_coords[0] + dir_add[0],
+														   global_coords.y + local_coords[1] + dir_add[1],
+														   global_coords.z + local_coords[2] + dir_add[2]];
+
+								if (domain_map_coords in domain_map) {
+									domain_map[domain_map_coords][domain_dir] = domain_label;
+									if (opp_dirs[domain_dir] in domain_map[domain_map_coords]) {
+										// Check to see if it's the complementary glue
+										let b_is_mismatch = false;
+										const domain_label2 = domain_map[domain_map_coords][opp_dirs[domain_dir]];
+										if (slat_system.uses_DNA_seqs) {
+											b_is_mismatch = false;
+											if (domain_label.length !== domain_label2.length) {
+												b_is_mismatch = true;
+											} else{
+												let i = 0;
+												while ((b_is_mismatch === false) && (i < domain_label.length)) {
+													if (domain_label[i] !== complements[domain_label2[domain_label.length-i-1]]) {
+														b_is_mismatch = true;
+													}
+													i = i + 1;
+												}
+											}
+										} else {
+											b_is_mismatch = ((domain_label + '*' !== domain_label2) && (domain_label2 + '*' !== domain_label));
+										}
+										if (b_is_mismatch) {
+											//console.log("mismatch at coords " + domain_map_coords + ": " + domain_label + " and " + domain_label2);
+
+											const mismatch_object = new THREE.Mesh(mismatch_cube, mismatch_material);
+											mismatch_object.position.copy(object.position);
+
+											// [TODO] Fix the shift_amount for mismatch cubes
+											const shift_amount = 2 * handle_height;//base_dim;// / 2;//domain_radius + handle_height;
+											if (domain_dir == 'U') {
+												mismatch_object.position.z += shift_amount;
+											} else if (domain_dir == 'D') {
+												mismatch_object.position.z -= shift_amount;
+											} else if (domain_dir == 'N') {
+												mismatch_object.position.y += shift_amount;
+											} else if (domain_dir == 'S') {
+												mismatch_object.position.y -= shift_amount;
+											} else if (domain_dir == 'E') {
+												mismatch_object.position.x += shift_amount;
+											} else if (domain_dir == 'W') {
+												mismatch_object.position.x -= shift_amount;
+											}
+
+											mismatch_object.matrixAutoUpdate = false;
+											mismatch_object.userData.obb = new OBB();
+											//mismatch_object.userData.obb.slat_name = slat_type.name;
+											mismatch_object.userData.obb.global_slat_coords = global_coords;
+											mismatch_object.userData.obb.local_block_coords = local_coords;
+											mismatch_object.userData.obb.type_hint = 'mismatch';
+											scene.add(mismatch_object);
+											object_list.push(mismatch_object);
+
+										}
+									}
+								} else {
+									domain_map[domain_map_coords] = {};
+									domain_map[domain_map_coords][domain_dir] = domain_label;
+								}
+
+								// Add to domain_map
+								//console.log('adding domain at global ' + global_coords + ', local ' + local_coords + ', domain list: ' + domain_list);
+							}
+						}
+					}
+					for (let i=0; i < this.line_objects_list.length; i++) {
+						const object = this.line_objects_list[i];
+						object.userData.obb.step_added = step_added;
+						scene.add(object);
+						object_list.push(object);
+					}
+				}
+
+				/*
+				clone() {
+					const drawn_slat_type = new DrawnSlatType();
+					for (let i=0; i < this.cylinder_objects_list.length; i++) {
+						drawn_slat_type.cylinder_objects_list.push(this.cylinder_objects_list[i].copy());
+					}
+					for (let i=0; i < this.line_objects_list.length; i++) {
+						drawn_slat_type.line_objects_list.push(this.line_objects_list[i].copy());
+					}
+					return drawn_slat_type;
+				}*/
+
+				constructor() {
+					this.cylinder_objects_list = Array();
+					this.line_objects_list = Array();
+				}
+
+				static from_slat_type(slat_type) {
+					const drawn_slat_type = new DrawnSlatType();
+					drawn_slat_type.slat_type = slat_type;
+
+					const b_horizontal = slat_type.is_horizontal();
+					let b_reversed = false;
+					if (b_horizontal === true) {
+						let diff = slat_type.blocks[1][0] - slat_type.blocks[0][0];
+						if (diff < 0) {
+							b_reversed = true;
+						}
+					} else {
+						let diff = slat_type.blocks[1][1] - slat_type.blocks[0][1];
+						if (diff < 0) {
+							b_reversed = true;
+						}
+					}
+
+					for (let i = 0; i < slat_type.blocks.length; i++) {
+						const block = slat_type.blocks[i];
+
+						// Get the correct cylinder and outline
+						let cylinder = domain_cylinder;
+						let lines = domain_edges;
+						if ((i == 0) || (i == (slat_type.blocks.length - 1))) {
+							cylinder = end_domain_cylinder;
+							lines = end_domain_edges;
+						}
+
+						// Check to see if there is a domain here that is colored and use that color if so, otherwise check to see if the slat has a color
+						let domain_color = null;
+						if (block in slat_type.domains) {
+							for (let d = 0; d < slat_type.domains[block].length; d++) {
+								const domain_dict = slat_type.domains[block][d];
+								if ('color' in domain_dict) {
+									if ((domain_color != null) && (domain_dict.color != domain_color)) {
+										console.log('[ERROR] Slat block has multiple domains set to different colors, which is not supported!');
+									} else if (domain_dict.color != null) {
+										domain_color = domain_dict['color'];
+									}
+								}
+							}
+						}
+						if (domain_color == null) {
+							domain_color = slat_type.color;
+						}
+
+						// Check for correctly colored material and create it if needed
+						if (!(domain_color in colored_materials)) {
+							colored_materials[domain_color] = new THREE.MeshLambertMaterial({color: domain_color});
+						}
+						const material = colored_materials[domain_color];
+
+						const domain_object = new THREE.Mesh(cylinder, material);
+						domain_object.matrixAutoUpdate = false;
+
+						let x_add = block[0];
+						let y_add = block[1];
+						domain_object.position.x = x_add * base_dim;
+						domain_object.position.y = y_add * base_dim;
+						domain_object.position.z = 0;
+
+						if (b_horizontal) {
+							if (((i === 0) && (b_reversed === false)) || ((b_reversed === true) && (i === (slat_type.blocks.length - 1)))) {
+								domain_object.position.x += end_shrinkage/2;
+							} else if (((i === (slat_type.blocks.length - 1)) && (b_reversed === false)) || ((b_reversed === true) && (i === 0))){
+								domain_object.position.x -= end_shrinkage/2;
+							}
+							domain_object.rotation.z = Math.PI / 2;
+						} else {
+							if (((i === 0) && (b_reversed === false)) || ((i === (slat_type.blocks.length - 1)) && (b_reversed === true))) {
+								domain_object.position.y += end_shrinkage/2;
+							} else if (((i === (slat_type.blocks.length - 1)) && (b_reversed === false)) || ((b_reversed === true) && (i === 0))) {
+								domain_object.position.y -= end_shrinkage/2;
+							}
+							domain_object.rotation.y = Math.PI / 2;
+						}
+
+						domain_object.userData.obb = new OBB();
+						domain_object.userData.obb.slat_name = slat_type.name;
+						domain_object.userData.obb.type_hint = 'domain';
+						drawn_slat_type.cylinder_objects_list.push(domain_object);
+
+						if (b_draw_lines) {
+							const line = new THREE.LineSegments(lines, new THREE.LineBasicMaterial({color: 0x000000}));
+							//line.matrixAutoUpdate = false;
+
+							line.position.x = domain_object.position.x;
+							line.position.y = domain_object.position.y;
+							line.position.z = domain_object.position.z;
+
+							if (b_horizontal) {
+								line.rotation.z = Math.PI / 2;
+							} else {
+								line.rotation.y = Math.PI / 2;
+							}
+							line.userData.obb = new OBB();
+							line.userData.obb.slat_name = slat_type.name;
+							line.userData.obb.local_block_coords = block;
+							line.userData.obb.type_hint = 'line';
+							drawn_slat_type.line_objects_list.push(line);
+						}
+
+						let domain_listing = Array();
+
+						if (block in slat_type.domains) {
+							for (let d = 0; d < slat_type.domains[block].length; d++) {
+								const domain_dict = slat_type.domains[block][d];
+
+								const domain_label = domain_dict['label'];
+								const domain_direction = domain_dict['direction'];
+
+								//domain_listing += '[' + domain_direction + '] ' + domain_label + '\n';
+								domain_listing.push([domain_direction, domain_label]);
+
+								if (b_draw_handles || b_draw_markers) {
+
+									const handle_position = new THREE.Vector3();
+									const handle_rotation = new THREE.Euler();
+									const marker_position = new THREE.Vector3();
+
+									handle_position.x = x_add * base_dim;
+									handle_position.y = y_add * base_dim;
+									handle_position.z = 0;
+
+									if (b_horizontal) {
+										handle_position.x += 0;// 1;
+									} else {
+										handle_position.y += 0;//1;
+									}
+									if (domain_direction === 'D') {
+										handle_position.z -= domain_radius
+										handle_rotation.x = Math.PI / 2;
+										marker_position.copy(handle_position);
+										marker_position.z -= (marker_cube_dim/2);
+									} else if (domain_direction === 'U') {
+										handle_position.z += domain_radius
+										handle_rotation.x = -(Math.PI / 2);
+										marker_position.copy(handle_position);
+										marker_position.z += (marker_cube_dim/2);
+									} else if (domain_direction === 'E') {
+										handle_position.x += domain_radius
+										handle_rotation.z = -(Math.PI / 2);
+										marker_position.copy(handle_position);
+										marker_position.x += (marker_cube_dim/2);
+									}	else if (domain_direction === 'W') {
+										handle_position.x -= domain_radius
+										handle_rotation.z = -(Math.PI / 2);
+										marker_position.copy(handle_position);
+										marker_position.x -= (marker_cube_dim/2);
+									} else if (domain_direction === 'N') {
+										handle_position.y += domain_radius
+										handle_rotation.y = -(Math.PI / 2);
+										marker_position.copy(handle_position);
+										marker_position.y += (marker_cube_dim/2);
+									}	else if (domain_direction === 'S') {
+										handle_position.y -= domain_radius
+										handle_rotation.y = -(Math.PI / 2);
+										marker_position.copy(handle_position);
+										marker_position.y -= (marker_cube_dim/2);
+									}
+
+									if (b_draw_handles) {
+										const handle_object = new THREE.Mesh(handle_cylinder, material);
+										handle_object.position.copy(handle_position);
+										handle_object.rotation.copy(handle_rotation);
+										handle_object.matrixAutoUpdate = false;
+										handle_object.userData.obb = new OBB();
+										handle_object.userData.obb.slat_name = slat_type.name;
+										handle_object.userData.obb.local_block_coords = block;
+										handle_object.userData.obb.type_hint = 'handle';
+										drawn_slat_type.cylinder_objects_list.push(handle_object);
+									}
+
+									if ((marker_label != null) && (domain_label === marker_label)) {
+										const marker_object = new THREE.Mesh(marker_cube, marker_material);
+										marker_object.position.copy(marker_position);
+										marker_object.matrixAutoUpdate = false;
+										marker_object.userData.obb = new OBB();
+										marker_object.userData.obb.slat_name = slat_type.name;
+										marker_object.userData.obb.local_block_coords = block;
+										marker_object.userData.obb.type_hint = 'marker';
+										drawn_slat_type.cylinder_objects_list.push(marker_object);
+									}
+								}
+							}
+						}
+						if (domain_listing.length > 0) {
+							domain_object.userData.obb.domain_listing = domain_listing;
+						}
+						domain_object.userData.obb.local_block_coords = block;
+					}
+					return drawn_slat_type;
+				}
+			}
+
+			function clearScene(obj){
+				while(obj.children.length > 0){
+					clearScene(obj.children[0]);
+					obj.remove(obj.children[0]);
+				}
+				if(obj.geometry) obj.geometry.dispose();
+
+				if(obj.material){
+					//in case of map, bumpMap, normalMap, envMap ...
+					Object.keys(obj.material).forEach(prop => {
+				  		if(!obj.material[prop])
+							return;
+				  		if(obj.material[prop] !== null && typeof obj.material[prop].dispose === 'function')
+							obj.material[prop].dispose();
+					})
+					obj.material.dispose();
+				}
+			}
+
+			function init2(b_reset_camera=true) {
+				if (b_reset_camera) {
+					camera.position.set(0, 0, 75);
+				}
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xffffff );
+
+				const hemiLight = new THREE.HemisphereLight( 0xffffff, 0x222222, 4 );
+				hemiLight.position.set( 1, 1, 1 );
+				scene.add( hemiLight );
+
+				objects = [];
+				slat_system = null;
+				colored_materials = {};
+				drawn_slat_types = {};
+
+				create_base_objects();
+			}
+
+			function create_base_objects() {
+				////////////////////////////////////////////////
+				// Regular domain cylinder
+				domain_cylinder = new THREE.CylinderGeometry( domain_radius, domain_radius, base_dim, num_sides_rendered );
+				domain_cylinder.userData.obb = new OBB();
+
+				const size = new THREE.Vector3( base_dim, domain_radius*2, domain_radius*2 );
+				domain_cylinder.userData.obb.halfSize.copy(size).multiplyScalar(0.5);
+				domain_edges = new THREE.EdgesGeometry(domain_cylinder, 90);
+
+				////////////////////////////////////////////////
+				// Domain cylinder for the ends of slats
+				end_domain_cylinder = new THREE.CylinderGeometry( domain_radius, domain_radius, base_dim - end_shrinkage, num_sides_rendered );
+				end_domain_cylinder.userData.obb = new OBB();
+
+				const size2 = new THREE.Vector3( base_dim - end_shrinkage, domain_radius*2, domain_radius*2 );
+				end_domain_cylinder.userData.obb.halfSize.copy(size2).multiplyScalar(0.5);
+				end_domain_edges = new THREE.EdgesGeometry(end_domain_cylinder, 90);
+
+				////////////////////////////////////////////////
+				// Cylinder for the handles
+				handle_cylinder = new THREE.CylinderGeometry( handle_radius, handle_radius, handle_height, num_sides_rendered );
+				handle_cylinder.userData.obb = new OBB();
+				const size3 = new THREE.Vector3( handle_radius, handle_radius, 2 );
+				handle_cylinder.userData.obb.halfSize.copy(size3).multiplyScalar(0.5);
+
+				////////////////////////////////////////////////
+				// Cube for the 'bit markers'
+				marker_cube = new THREE.BoxGeometry( marker_cube_dim, marker_cube_dim, marker_cube_dim );
+				marker_cube.userData.obb = new OBB();
+				const size4 = new THREE.Vector3( marker_cube_dim, marker_cube_dim, marker_cube_dim );
+				marker_cube.userData.obb.halfSize.copy(size4).multiplyScalar(0.5);
+				marker_material = new THREE.MeshLambertMaterial({color: 'black'});
+
+				////////////////////////////////////////////////
+				// Cube for the 'mismatch markers'
+				mismatch_cube = new THREE.BoxGeometry( mismatch_cube_dim, mismatch_cube_dim, mismatch_cube_dim );
+				mismatch_cube.userData.obb = new OBB();
+				//const size5 = new THREE.Vector3( mismatch_cube_dim, mismatch_cube_dim, mismatch_cube_dim );
+				//mismatch_cube.userData.obb.halfSize.copy(size5).multiplyScalar(0.5);
+				mismatch_material = new THREE.MeshLambertMaterial({color: 'yellow', transparent: true, opacity: 0.5});
+
+				hitbox = new THREE.Mesh( domain_cylinder, new THREE.MeshBasicMaterial( { color: 0x000000, wireframe: true } ) );
+			}
+
+			async function handleSaveSystem() {
+
+				if (loaded_file_name === 'No File Loaded') {
+					console.log("No system is loaded, so there's nothing to save.");
+					return;
+				}
+
+				const xml_content = slat_system.output_xml();
+
+				const pickerOptions = {
+					suggestedName: `${loaded_file_name.substring(0, loaded_file_name.length - 4)}-${assembly_max_step}steps.xml`,
+					types: [
+							{
+							  description: 'Slat System File',
+							  accept: {
+								  'xml/xml': ['.xml'],
+							  },
+							},
+					],
+				};
+				const fileHandle = await window.showSaveFilePicker(pickerOptions);
+				const writableFileStream = await fileHandle.createWritable();
+				await writableFileStream.write(xml_content);
+				await writableFileStream.close();
+			}
+
+			function handleFileSelect() {
+				let input = document.createElement('input');
+				input.type = 'file';
+				input.onchange = e => {
+				   let file = e.target.files[0];
+				   console.log("Loading file " + file.name);
+				   loaded_file_name = file.name;
+
+					let fr = new FileReader();
+					fr.onload = function () {
+						//document.getElementById('output').textContent = fr.result;
+						const xml_string = fr.result;
+						const parser = new DOMParser();
+						const xmlDoc = parser.parseFromString(xml_string, "text/xml");
+
+						const system_node = xmlDoc.querySelector("PolyominoSystem");
+						slat_system = new SlatSystem(system_node);
+						//console.log("Loaded slat system.");
+						document.getElementById('filename_div').innerHTML = 'Loaded file: ' + file.name;
+						//console.log(files[0]);
+
+						if (slat_system.marking_domain_label) {
+							marker_label = slat_system.marking_domain_label;
+							console.log("Using domain label '" + marker_label + "' as the marker label.");
+						}
+
+						if (slat_system.uses_DNA_seqs) {
+							console.log("The loaded slat system uses DNA sequences as handle labels.");
+						}
+
+						const z_range = drawSlatSystem();
+						createLayerVisProps(z_range[0], z_range[1]);
+						destroyGuiFolders();
+				   		createGuiFolders();
+					}
+					fr.readAsText(file);
+
+				   destroyGuiFolders();
+				   createGuiFolders();
+				}
+				input.click();
+			}
+
+			function destroyGuiFolders() {
+				gui.destroy();
+			}
+
+			function createGuiFolders() {
+				gui = new GUI({ container: document.getElementById('container_div') });
+				folderFile = gui.addFolder('File');
+				folderFile.add(propsFile, 'Load System');
+				folderFile.add(propsFile, 'Save System');
+				folderFile.close();
+
+				folderDrawingOptions = gui.addFolder('Drawing Options');
+				folderDrawingOptions.add(propsDrawing, 'View Handles').onChange(function (value) {
+					b_show_handles = value;
+				});
+				folderDrawingOptions.add(propsDrawing, 'View Lines').onChange(function (value) {
+					b_show_lines = value;
+				});
+				folderDrawingOptions.add(propsDrawing, 'View Domains').onChange(function (value) {
+					b_show_domains = value;
+				});
+				folderDrawingOptions.add(propsDrawing, 'View Markers').onChange(function (value) {
+					b_show_markers = value;
+				});
+				folderDrawingOptions.add(propsDrawing, 'Highlight Mismatches').onChange(function (value) {
+					b_show_mismatches = value;
+				});
+				folderDrawingOptions.close();
+
+				folderSpaceVis = gui.addFolder('Space Visibility');
+				x_range_ctrl = folderSpaceVis.add(propsSpaceVis, 'X Range').onFinishChange(function (value) {
+					visRangeChange();
+				});
+				y_range_ctrl = folderSpaceVis.add(propsSpaceVis, 'Y Range').onFinishChange(function (value) {
+					visRangeChange();
+				})
+				z_range_ctrl = folderSpaceVis.add(propsSpaceVis, 'Z Range').onFinishChange(function (value) {
+					visRangeChange();
+				})
+				for (let prop in propsLayers) {
+					folderSpaceVis.add(propsLayers, prop).onChange(function (value) {
+						console.log(prop.split(' ') + ', ' + value);
+						viewable_layers[prop.split(' ')[1]] = value;
+						console.log(viewable_layers);
+					});
+				}
+				folderSpaceVis.close();
+
+				folderSteps = gui.addFolder('Assembly Step');
+				max_vis_steps_ctrl = folderSteps.add(propsSteps, 'Max Visible Step')
+				folderSteps.add(propsSteps, 'Set Current Step')
+				folderSteps.add(propsSteps, 'Step');
+				folderSteps.add(propsSteps, 'Start')
+				folderSteps.add(propsSteps, 'Stop')
+				steps_speed_ctrl = folderSteps.add(propsSteps, 'Step Speed', 1, 200, 1).onChange(function (value) {
+					rangeSpeedClick();
+				});
+				folderSteps.close();
+
+				gui.add( propsMouse, 'Display mouse location info' ).onChange(function (value) {
+					b_display_mouseover = value;
+				});
+			}
+
+			init();
+
+			function init() {
+
+				camera = new THREE.PerspectiveCamera( 80, window.innerWidth / window.innerHeight, 1, 8000 );
+
+				init2();
+
+				clock = new THREE.Clock();
+
+				raycaster = new THREE.Raycaster();
+
+				//const container_div = document.getElementById('container_div');
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				//renderer = new THREE.WebGLRenderer( { antialias: true, powerPreference: "high-performance", precision: "lowp" } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				document.body.appendChild( renderer.domElement );
+
+
+				//renderer.domElement.appendChild( container_div );
+
+				//
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				//controls = new OrbitControls( camera, container_div );
+				//controls.enabled = false;
+				controls.autoRotate = false;
+				controls.enableDamping = true;
+				controls.dampingFactor = 0.7;
+
+				//controls.target.set( 0, 1, 0 );
+				//controls.update();
+
+				//
+
+				if (b_display_stats) {
+					stats = new Stats();
+					document.body.appendChild(stats.dom);
+				}
+
+
+				createGuiFolders();
+
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				document.addEventListener( 'click', onClick );
+
+				document.addEventListener( 'mousemove', onMouseOver );
+
+			}
+
+            function onMouseOver( event) {
+				onClick(event);
+			}
+
+			const dir_names = {'U': 'Up', 'D': 'Down', 'N': 'North', 'E': 'East', 'S': 'South', 'W': 'West'};
+
+			function onClick( event ) {
+
+				//event.preventDefault();
+
+				mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+				raycaster.setFromCamera( mouse, camera );
+
+				const intersectionPoint = new THREE.Vector3();
+				const intersections = [];
+
+				for ( let i = 0, il = objects.length; i < il; i ++ ) {
+
+					const object = objects[ i ];
+					const obb = object.userData.obb;
+
+					if (obb) {
+
+						const ray = raycaster.ray;
+
+						if (obb.intersectRay(ray, intersectionPoint) !== null) {
+
+							const distance = ray.origin.distanceTo(intersectionPoint);
+							intersections.push({distance: distance, object: object});
+						}
+					}
+				}
+
+				var b_hit = false;
+				if ( intersections.length > 0 ) {
+
+					// determine closest intersection and highlight the respective 3D object
+					intersections.sort( sortIntersections );
+
+					if (intersections[0].object.visible) {
+						b_hit = true;
+						const object_data = intersections[0].object.userData.obb;
+						if (object_data) {
+							let domain_coords = new THREE.Vector3(object_data.global_slat_coords.x + object_data.local_block_coords[0],
+									object_data.global_slat_coords.y + object_data.local_block_coords[1],
+									object_data.global_slat_coords.z + object_data.local_block_coords[2]);
+							let message = 'Slat type: ' + object_data.slat_name + '\n'
+							message += 'Global coords: (' + domain_coords.x + ',' + domain_coords.y + ',' + domain_coords.z + ')\n';
+							message += 'Coords in slat: ' + object_data.local_block_coords + '\n';
+							message += 'Domains:\n';
+							if (intersections[0].object.userData.obb.domain_listing) {
+								const domain_listing = intersections[0].object.userData.obb.domain_listing;
+								for (const domain of domain_listing) {
+									message += '   ' + dir_names[domain[0]] + ': ' + domain[1] + '\n';
+								}
+							} else {
+								message += '  (none)';
+							}
+							if (intersections[0].object.userData.obb.step_added) {
+								message += 'Step added: ' + intersections[0].object.userData.obb.step_added;
+							}
+							//console.log(message);
+							writeOutputMessage(message);
+
+							intersections[0].object.add(hitbox);
+						}
+					}
+
+				}
+				if (b_hit == false) {
+
+					const parent = hitbox.parent;
+
+					if ( parent ) parent.remove( hitbox );
+
+					writeOutputMessage("");
+
+				}
+
+			}
+
+			function sortIntersections( a, b ) {
+
+				return a.distance - b.distance;
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function animate() {
+
+				controls.update();
+
+				if (b_is_playing) {
+					max_vis_steps_ctrl.setValue(max_visible_step);
+				}
+
+				// transform cubes
+
+				//const delta = clock.getDelta();
+
+				for ( let i = 0, il = objects.length; i < il; i ++ ) {
+
+					const object = objects[ i ];
+
+					if (( object.userData.obb ) && ( object.userData.obb.global_slat_coords ) && ( object.userData.obb.local_block_coords ))
+					{
+						// The following three lines use the base coords of each slat rather than coords of each domain
+						//const x = object.userData.obb.global_slat_coords.x;
+						//const y = object.userData.obb.global_slat_coords.y;
+						//const z = object.userData.obb.global_slat_coords.z;
+
+						let b_visible = true;
+
+						if (object.userData.obb.step_added > max_visible_step) {
+							b_visible = false;
+						} else if (object.userData.obb.type_hint === 'domain') {
+							b_visible = b_show_domains;
+						} else if (object.userData.obb.type_hint === 'line') {
+							b_visible = b_show_lines;
+						} else if (object.userData.obb.type_hint === 'handle') {
+							b_visible = b_show_handles;
+						} else if (object.userData.obb.type_hint === 'marker') {
+							b_visible = b_show_markers;
+						} else if (object.userData.obb.type_hint === 'mismatch') {
+							b_visible = b_show_mismatches;
+						}
+
+						if (b_visible) {
+							const x = object.userData.obb.global_slat_coords.x + object.userData.obb.local_block_coords[0];
+							const y = object.userData.obb.global_slat_coords.y + object.userData.obb.local_block_coords[1];
+							const z = object.userData.obb.global_slat_coords.z + object.userData.obb.local_block_coords[2];
+
+							if (viewable_layers[z] === false) {
+								b_visible = false;
+							}
+
+							if ((viewable_x_range[0] != null) && (x < viewable_x_range[0])) {
+								b_visible = false;
+							}
+							if ((viewable_x_range[1] != null) && (x > viewable_x_range[1])) {
+								b_visible = false;
+							}
+							if ((viewable_y_range[0] != null) && (y < viewable_y_range[0])) {
+								b_visible = false;
+							}
+							if ((viewable_y_range[1] != null) && (y > viewable_y_range[1])) {
+								b_visible = false;
+							}
+							if ((viewable_z_range[0] != null) && (z < viewable_z_range[0])) {
+								b_visible = false;
+							}
+							if ((viewable_z_range[1] != null) && (z > viewable_z_range[1])) {
+								b_visible = false;
+							}
+
+						}
+
+						object.visible = b_visible;
+					}
+
+
+					//object.rotation.x += delta * Math.PI * 0.20;
+					//object.rotation.y += delta * Math.PI * 0.1;
+
+					object.updateMatrix();
+					object.updateMatrixWorld();
+
+					// update OBB
+
+					if (( object.userData.obb ) && ( object.geometry.userData.obb  )) {
+						object.userData.obb.copy(object.geometry.userData.obb);
+						object.userData.obb.applyMatrix4(object.matrixWorld);
+					}
+
+					// reset
+
+					//object.material.color.setHex( 0x00ff00 );
+
+				}
+
+				// collision detection
+
+				// for ( let i = 0, il = objects.length; i < il; i ++ ) {
+				//
+				// 	const object = objects[ i ];
+				// 	const obb = object.userData.obb;
+				//
+				// 	for ( let j = i + 1, jl = objects.length; j < jl; j ++ ) {
+				//
+				// 		const objectToTest = objects[ j ];
+				// 		const obbToTest = objectToTest.userData.obb;
+				//
+				// 		// now perform intersection test
+				//
+				// 		if ( obb.intersectsOBB( obbToTest ) === true ) {
+				//
+				// 			object.material.color.setHex( 0xff0000 );
+				// 			objectToTest.material.color.setHex( 0xff0000 );
+				//
+				// 		}
+				//
+				// 	}
+				//
+				// }
+
+				renderer.render( scene, camera );
+
+				if (b_display_stats) {
+					stats.update();
+				}
+
+			}
+
+	</script>
+
+</body>
+</html>
