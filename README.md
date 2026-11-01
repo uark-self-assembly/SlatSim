@@ -56,3 +56,8 @@ In embedded mode, **Save System** hands the system to the surrounding page inste
 Simulated steps and a changed binding threshold count as unsaved changes. While there are any, the page title
 starts with `*`, so the surrounding page can also check `iframe.contentDocument.title` (for example, to warn before
 leaving the page).
+
+## License
+
+SlatSim is released under the MIT License (see `LICENSE`). The bundled three.js (`build/`, `jsm/`) and lil-gui
+keep their own MIT licenses, and vkbeautify is MIT/GPL dual-licensed.
