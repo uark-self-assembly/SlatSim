@@ -3,11 +3,17 @@ from http.server import HTTPServer, CGIHTTPRequestHandler
 
 port = 8000
 
+class NoCacheRequestHandler(CGIHTTPRequestHandler):
+    # Tell the browser not to cache files, so edits to the page and its modules show up on reload
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store')
+        super().end_headers()
+
 def main(port):
     # Make sure the server is created at current directory
     os.chdir('.')
     # Create server object listening the port specified
-    server_object = HTTPServer(server_address=('', port), RequestHandlerClass=CGIHTTPRequestHandler)
+    server_object = HTTPServer(server_address=('', port), RequestHandlerClass=NoCacheRequestHandler)
     # Start the web server
     try:
         print(f'Web server starting on port {port}.')

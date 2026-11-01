@@ -31,23 +31,31 @@ class SlatSystem {
 			this.marking_domain_label = xml_node.querySelector("marking_domain_label").textContent;
 		}
 
-		if (xml_node.querySelector("seed")) {
-			this.seed_assembly = new SlatAssembly(xml_node.querySelector("seed"), this.slat_types, this.uses_DNA_seqs);
+		const seed_node = xml_node.querySelector("seed");
+		const assembly_node = xml_node.querySelector("assembly");
+
+		if (seed_node) {
+			this.seed_assembly = new SlatAssembly(seed_node, this.slat_types, this.uses_DNA_seqs);
 			this.validate_assembly(this.seed_assembly);
 		} else {
 			this.seed_assembly = null;
 		}
 
-		if (xml_node.querySelector("assembly")) {
-			this.assembly = new SlatAssembly(xml_node.querySelector("assembly"), this.slat_types, this.uses_DNA_seqs);
-			this.validate_assembly(this.assembly);
-		} else {
-			this.assembly = null;
+		// The main assembly starts from a separate copy of the seed (so simulated slats aren't also added to the seed, and
+		//   the seed's slats are part of the assembly even if the file's assembly omits them), then adds the file's assembly slats.
+		this.assembly = null;
+		if (seed_node) {
+			this.assembly = new SlatAssembly(seed_node, this.slat_types, this.uses_DNA_seqs);
 		}
-
-		if (this.assembly.slats.length === 0) {
-			console.log('[INFO] The loaded assembly is empty, so setting the seed assembly as the main assembly.')
-			this.assembly = this.seed_assembly;
+		if (assembly_node) {
+			if (this.assembly === null) {
+				this.assembly = new SlatAssembly(assembly_node, this.slat_types, this.uses_DNA_seqs);
+			} else {
+				this.assembly.AddSlatsFromXml(assembly_node, this.uses_DNA_seqs);
+			}
+		}
+		if (this.assembly !== null) {
+			this.validate_assembly(this.assembly);
 		}
 	}
 
@@ -113,13 +121,18 @@ class SlatSystem {
 		}
 	}
 
+	// Simulate up to num_steps slat additions. Returns the number of slats actually added, which is less
+	//   than num_steps only if the assembly became terminal (no more slats can attach).
 	simulate_steps(num_steps) {
 		for (let c=0; c<num_steps; c++) {
-			this.assembly.StepForward(this.binding_threshold, this.uses_DNA_seqs, false);
-			if ((c % 50) == 0) {
+			if (!this.assembly.StepForward(this.binding_threshold, this.uses_DNA_seqs, false)) {
+				return c;
+			}
+			if ((num_steps > 50) && (c > 0) && ((c % 50) == 0)) {
 				console.log(c + ' of ' + num_steps + ' steps completed.')
 			}
 		}
+		return num_steps;
 	}
 }
 
@@ -142,12 +155,18 @@ class SlatAssembly {
 	constructor(xml_node, slat_types, uses_DNA_seqs) {
 		this.slat_types = slat_types;
 		this.slats = Array();
+		this.slat_keys = new Set();	// 'type@translation' of each slat, to detect duplicate slats
 		this.location_map = {};
 		this.frontier = {};
 		this.last_step_added = 0;
 
 		this.create_glue_dir_map();
 
+		this.AddSlatsFromXml(xml_node, uses_DNA_seqs);
+	}
+
+	// Add the slats listed in the Polyominoes element of xml_node, skipping any that are already in the assembly
+	AddSlatsFromXml(xml_node, uses_DNA_seqs) {
 		const assembly_slats_node = xml_node.querySelector("Polyominoes");
 		const assembly_slats = assembly_slats_node.querySelectorAll("Polyomino");
 		for (let i = 0; i < assembly_slats.length; i++) {
@@ -156,16 +175,19 @@ class SlatAssembly {
 			const translation = assembly_slat.querySelector("translation").textContent.replace("(", "").replace(")", "").split(",").map(Number);
 			let step_added = null;
 			if (assembly_slat.querySelector("stepAdded")) {
-				step_added = assembly_slat.querySelector("stepAdded").textContent;
+				step_added = parseInt(assembly_slat.querySelector("stepAdded").textContent);
 				if (step_added > this.last_step_added) {
 					this.last_step_added = step_added;
 				}
+			}
+			if (this.slat_keys.has(slat_type_name + '@' + translation)) {
+				continue;
 			}
 			const slat_type = this.slat_types[slat_type_name];
 			const slat = new SlatType();
 			slat.set_from_type(slat_type);
 			slat.translate_to(translation);
-			this.AddSlat(slat, translation, parseInt(step_added), uses_DNA_seqs);
+			this.AddSlat(slat, translation, step_added, uses_DNA_seqs);
 		}
 	}
 
@@ -224,12 +246,12 @@ class SlatAssembly {
 	// Add a slat to the assembly. Note that the drawing_translation is the translation that the slat has been moved to already
 	//   and is only used for the drawing (which should be updated to no longer need it).
 	AddSlat(slat, drawing_translation, step_added, uses_DNA_seqs) {
-		this.slats.push({'slat_type_name': slat.name, 'translation': drawing_translation, 'step_added': step_added});
-
 		if (this.OverlapsExistingSlat(slat)) {
 			console.log("[ERROR] Adding a slat to an existing location!");
 			return false;
 		} else {
+			this.slats.push({'slat_type_name': slat.name, 'translation': drawing_translation, 'step_added': step_added});
+			this.slat_keys.add(slat.name + '@' + drawing_translation);
 			for (let j=0; j<slat.blocks.length; j++) {
 				const block = slat.blocks[j];
 
@@ -326,7 +348,7 @@ class SlatAssembly {
 
 	StepForward(binding_threshold, uses_DNA_seqs, b_report_nondeterminism) {
 		const frontier_locs = Object.keys(this.frontier);
-		if (frontier_locs === 0) {
+		if (frontier_locs.length === 0) {
 			console.log('[INFO] The frontier of the assembly is empty. No slat additions are possible.');
 			return false;
 		}
@@ -399,6 +421,7 @@ class SlatAssembly {
 								if (!b_report_nondeterminism) {
 									this.last_step_added += 1;
 									this.AddSlat(slat, translation, this.last_step_added, uses_DNA_seqs);
+									b_added = true;
 								}
 								// If we need to report nondeterminism, keep going, otherwise just add this slat.
 							}
@@ -416,6 +439,7 @@ class SlatAssembly {
 				break;
 			}
 		}
+		return b_added;
 	}
 }
 
