@@ -18,7 +18,10 @@ import ftputil
 # FTP server vars:
 ftpServer = 'ftp.self-assembly.net'
 ftpUser   = 'softwareupload@self-assembly.net'
-ftpPass   = 'REMOVED'
+# The FTP password is read from a file that is not in the repository: by default
+# ~/.slatsim_ftp_password, or the file named by the SLATSIM_FTP_PASSWORD_FILE
+# environment variable. The file holds just the password.
+ftpPassFile = os.environ.get('SLATSIM_FTP_PASSWORD_FILE', os.path.expanduser('~/.slatsim_ftp_password'))
 ftpDir    = "software/SlatViewer/"
 #
 # Location of the source directory relative to this script (only modify the first
@@ -115,6 +118,13 @@ for file in fileNames:
 		os.makedirs(dirname)
 	shutil.copy(file, destination)
 print(f"Done copying source files to '{localDestination}'")
+
+# Read the FTP password
+try:
+	with open(ftpPassFile) as passFile:
+		ftpPass = passFile.read().strip()
+except OSError as error:
+	raise SystemExit(f"Can't read the FTP password from '{ftpPassFile}' ({error.strerror}). Put the password in that file, or name another file with SLATSIM_FTP_PASSWORD_FILE.")
 
 # Upload the 'packaged' files into the destination folder(s) on the FTP server
 with ftputil.FTPHost(ftpServer, ftpUser, ftpPass) as ftp_host:

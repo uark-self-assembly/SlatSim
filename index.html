@@ -203,7 +203,10 @@
 				'View Lines': true,
 				'View Domains': true,
 				'View Markers': true,
-				'Highlight Mismatches': true
+				'Highlight Mismatches': true,
+				'Fit View': function() {
+					fitViewToSystem();
+				},
 			};
 			let propsLayers = {
 				'Layer 0': true,
@@ -216,6 +219,7 @@
 			const propsSim = {
 				'Current Step': 0,
 				'Speed (steps/s)': 10,
+				'Binding Threshold': 1,
 				'Simulate New Steps': true,
 				'Steps to Simulate': 100,
 				'Simulate': function() {
@@ -230,7 +234,7 @@
 			};
 
 			let folderFile, folderDrawingOptions, folderSpaceVis, folderSim = null;
-			let current_step_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
+			let current_step_ctrl, binding_threshold_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
 			let sim_status_div, play_back_button, play_fwd_button = null;
 
 			let loaded_file_name = 'No File Loaded';
@@ -261,6 +265,7 @@
 				propsLayers = {}
 				for (let i=min_layer; i<=max_layer; i++) {
 					propsLayers['Layer ' + i] = true;
+					viewable_layers[i] = true;
 				}
 			}
 
@@ -310,6 +315,7 @@
 				}
 				if (num_added > 0) {
 					drawNewAssemblySlats();
+					setModified(true);
 				}
 				updateSimControls();
 				return num_added;
@@ -333,6 +339,33 @@
 				if (((play_direction > 0) && b_at_end) || ((play_direction < 0) && (current_step <= 0))) {
 					pausePlay();
 				}
+			}
+
+			// Change the binding threshold used for simulation. Steps after the current one were simulated with the old
+			//   threshold, so they are deleted.
+			function setBindingThreshold(value) {
+				if ((slat_system == null) || !Number.isFinite(value)) {
+					updateSimControls();
+					return;
+				}
+				value = Math.max(1, Math.round(value));
+				if (value === slat_system.binding_threshold) {
+					updateSimControls();
+					return;
+				}
+				pausePlay();
+				slat_system.binding_threshold = value;
+				if (current_step < assembly_max_step) {
+					console.log('[INFO] Binding threshold changed to ' + value + ', so deleting the steps after step ' + current_step + '.');
+					slat_system.truncate_to_step(current_step);
+					const system = slat_system;
+					clearDrawnSystem();
+					slat_system = system;
+					drawSlatSystem();
+				}
+				b_assembly_terminal = false;
+				setModified(true);
+				updateSimControls();
 			}
 
 			function startPlay(direction) {
@@ -375,6 +408,10 @@
 
 			function updateSimControls() {
 				propsSim['Current Step'] = current_step;
+				propsSim['Binding Threshold'] = (slat_system != null) ? slat_system.binding_threshold : 1;
+				if (binding_threshold_ctrl) {
+					binding_threshold_ctrl.updateDisplay();
+				}
 				if (current_step_ctrl) {
 					current_step_ctrl.max(Math.max(1, assembly_max_step));
 					current_step_ctrl.updateDisplay();
@@ -870,6 +907,15 @@
 				}
 			}
 
+			// Remove the drawn system from the scene (this also sets slat_system to null)
+			function clearDrawnSystem() {
+				clearScene(scene);
+				init2(false);
+				for (const coords in domain_map) {
+					delete domain_map[coords];
+				}
+			}
+
 			function clearScene(obj){
 				while(obj.children.length > 0){
 					clearScene(obj.children[0]);
@@ -954,91 +1000,245 @@
 				hitbox = new THREE.Mesh( domain_cylinder, new THREE.MeshBasicMaterial( { color: 0x000000, wireframe: true } ) );
 			}
 
+			//////////////////////////////////////////////////////////////
+			// Embedding
+			//
+			// Another page on the same site (e.g. the research server's project outline) can show a slat system in an
+			// iframe of this page with
+			//   index.html?embed=1&system=<same-site URL of a slat system file>&name=<file name>&step=<step to show>
+			// (system, name, step, and controls=closed, which starts with the control panel collapsed, also work
+			// without embed=1) and the two pages talk with window.postMessage
+			// (same origin only), as JSON strings:
+			//   SlatSim -> page: {"type": "slatsim:ready"}
+			//                    {"type": "slatsim:loaded", "name": ..., "steps": <last step>, "binding_threshold": ...}
+			//                    {"type": "slatsim:error", "message": ...}
+			//                    {"type": "slatsim:modified", "modified": true|false}
+			//                    {"type": "slatsim:save", "filename": ..., "content": <slat system XML>}
+			//   page -> SlatSim: {"type": "slatsim:load", "content": <slat system XML>, "name": ...}
+			//                    {"type": "slatsim:saved"}
+			//                    {"type": "slatsim:step", "step": <step to show>}
+			// Embedded, Save System hands the system to the page (as slatsim:save) instead of downloading it, and Load
+			// System is hidden. While there are unsaved changes (simulated steps or a changed binding threshold), the
+			// page title starts with '*'; the page should send slatsim:saved once it has stored a saved system.
+			const page_params = new URLSearchParams(window.location.search);
+			const b_embedded = (page_params.get('embed') === '1');
+			let pending_initial_step = page_params.has('step') ? Number(page_params.get('step')) : null;
+			let b_gui_closed = (page_params.get('controls') === 'closed');	// Kept when the GUI is rebuilt
+			let b_modified = false;
+
+			function sendToPage(message) {
+				if (b_embedded && (window.parent !== window)) {
+					window.parent.postMessage(JSON.stringify(message), window.location.origin);
+				}
+			}
+
+			function onPageMessage(event) {
+				if ((event.origin !== window.location.origin) || (event.source !== window.parent) || (typeof event.data !== 'string')) {
+					return;
+				}
+				let message;
+				try {
+					message = JSON.parse(event.data);
+				} catch (e) {
+					return;
+				}
+				if (message.type === 'slatsim:load') {
+					loadSystemFromText(String(message.content), message.name || 'slat_system.xml');
+				} else if (message.type === 'slatsim:saved') {
+					setModified(false);
+				} else if ((message.type === 'slatsim:step') && Number.isFinite(Number(message.step))) {
+					pausePlay();
+					goToStep(Number(message.step));
+				}
+			}
+
+			function setModified(b_value) {
+				if (b_modified !== b_value) {
+					b_modified = b_value;
+					sendToPage({type: 'slatsim:modified', modified: b_value});
+				}
+				const title = (slat_system != null) ? loaded_file_name + ' - Crisscross Slat System Viewer' : 'Crisscross Slat System Viewer';
+				document.title = (b_modified ? '* ' : '') + title;
+			}
+
+			function reportLoadError(message) {
+				console.log('[ERROR] ' + message);
+				document.getElementById('filename_div').textContent = message;
+				sendToPage({type: 'slatsim:error', message: message});
+			}
+
+			// Load a slat system file from this same site
+			function loadSystemFromURL(url_text, name) {
+				const url = new URL(url_text, window.location.href);
+				if (url.origin !== window.location.origin) {
+					reportLoadError('Only slat system files from this site can be opened.');
+					return;
+				}
+				if (!name) {
+					name = decodeURIComponent(url.pathname.split('/').pop()) || 'slat_system.xml';
+				}
+				document.getElementById('filename_div').textContent = 'Loading ' + name + '...';
+				fetch(url).then(function (response) {
+					if (!response.ok) {
+						throw new Error('the server answered ' + response.status);
+					}
+					return response.text();
+				}).then(function (xml_string) {
+					loadSystemFromText(xml_string, name);
+				}).catch(function (error) {
+					reportLoadError('Could not load ' + name + ': ' + error.message);
+				});
+			}
+
+			// Replace the current system with the one in xml_string. Returns whether it loaded.
+			function loadSystemFromText(xml_string, name) {
+				const xmlDoc = new DOMParser().parseFromString(xml_string, "text/xml");
+				const system_node = xmlDoc.querySelector("PolyominoSystem");
+				if (system_node == null) {
+					reportLoadError(name + " isn't a slat system file.");
+					return false;
+				}
+
+				// Remove any previously loaded system from the scene
+				pausePlay();
+				clearDrawnSystem();
+				marker_label = null;
+
+				try {
+					slat_system = new SlatSystem(system_node);
+				} catch (error) {
+					console.error(error);
+					slat_system = null;
+					updateSimControls();
+					reportLoadError('Could not read ' + name + ': ' + error.message);
+					return false;
+				}
+				console.log("Loaded file " + name);
+				loaded_file_name = name;
+				document.getElementById('filename_div').textContent = 'Loaded file: ' + name;
+
+				if (slat_system.marking_domain_label) {
+					marker_label = slat_system.marking_domain_label;
+					console.log("Using domain label '" + marker_label + "' as the marker label.");
+				}
+
+				if (slat_system.uses_DNA_seqs) {
+					console.log("The loaded slat system uses DNA sequences as handle labels.");
+				}
+
+				const z_range = drawSlatSystem();
+				createLayerVisProps(z_range[0], z_range[1]);
+				destroyGuiFolders();
+				createGuiFolders();
+				fitViewToSystem();
+
+				// The step requested in the page's URL applies to the first system loaded
+				if ((pending_initial_step !== null) && Number.isFinite(pending_initial_step)) {
+					goToStep(pending_initial_step);
+				}
+				pending_initial_step = null;
+
+				setModified(false);
+				sendToPage({type: 'slatsim:loaded', name: name, steps: assembly_max_step, binding_threshold: slat_system.binding_threshold});
+				return true;
+			}
+
+			// Point the camera at the whole system from above
+			function fitViewToSystem() {
+				const box = new THREE.Box3();
+				for (const object of objects) {
+					object.updateMatrix();
+					box.expandByObject(object);
+				}
+				if (box.isEmpty()) {
+					return;
+				}
+				const center = box.getCenter(new THREE.Vector3());
+				const size = box.getSize(new THREE.Vector3());
+				const fit_height = Math.max(size.y, size.x / camera.aspect);
+				const distance = ((fit_height / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) * 1.1 + (size.z / 2);
+				camera.position.set(center.x, center.y, center.z + distance);
+				camera.far = Math.max(8000, distance * 4);
+				camera.updateProjectionMatrix();
+				controls.target.copy(center);
+				controls.update();
+			}
+
 			async function handleSaveSystem() {
 
-				if (loaded_file_name === 'No File Loaded') {
+				if (slat_system == null) {
 					console.log("No system is loaded, so there's nothing to save.");
 					return;
 				}
 
 				const xml_content = slat_system.output_xml();
 
-				const pickerOptions = {
-					suggestedName: `${loaded_file_name.substring(0, loaded_file_name.length - 4)}-${assembly_max_step}steps.xml`,
-					types: [
-							{
-							  description: 'Slat System File',
-							  accept: {
-								  'xml/xml': ['.xml'],
-							  },
-							},
-					],
-				};
-				const fileHandle = await window.showSaveFilePicker(pickerOptions);
-				const writableFileStream = await fileHandle.createWritable();
-				await writableFileStream.write(xml_content);
-				await writableFileStream.close();
+				if (b_embedded) {
+					sendToPage({type: 'slatsim:save', filename: loaded_file_name, content: xml_content});
+					return;
+				}
+
+				const suggested_name = `${loaded_file_name.replace(/\.xml$/i, '')}-${assembly_max_step}steps.xml`;
+				if (window.showSaveFilePicker) {
+					const pickerOptions = {
+						suggestedName: suggested_name,
+						types: [
+								{
+								  description: 'Slat System File',
+								  accept: {
+									  'xml/xml': ['.xml'],
+								  },
+								},
+						],
+					};
+					let fileHandle;
+					try {
+						fileHandle = await window.showSaveFilePicker(pickerOptions);
+					} catch (error) {
+						return;	// The save was cancelled
+					}
+					const writableFileStream = await fileHandle.createWritable();
+					await writableFileStream.write(xml_content);
+					await writableFileStream.close();
+				} else {
+					// Browsers without the file system access API (Firefox, Safari) download the file instead
+					const link = document.createElement('a');
+					link.href = URL.createObjectURL(new Blob([xml_content], {type: 'text/xml'}));
+					link.download = suggested_name;
+					link.click();
+					setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
+				}
+				setModified(false);
 			}
 
 			function handleFileSelect() {
 				let input = document.createElement('input');
 				input.type = 'file';
 				input.onchange = e => {
-				   let file = e.target.files[0];
-				   console.log("Loading file " + file.name);
-				   loaded_file_name = file.name;
-
-					let fr = new FileReader();
+					const file = e.target.files[0];
+					const fr = new FileReader();
 					fr.onload = function () {
-						//document.getElementById('output').textContent = fr.result;
-						const xml_string = fr.result;
-						const parser = new DOMParser();
-						const xmlDoc = parser.parseFromString(xml_string, "text/xml");
-
-						// Remove any previously loaded system from the scene
-						clearScene(scene);
-						init2(false);
-						for (const coords in domain_map) {
-							delete domain_map[coords];
-						}
-						marker_label = null;
-
-						const system_node = xmlDoc.querySelector("PolyominoSystem");
-						slat_system = new SlatSystem(system_node);
-						//console.log("Loaded slat system.");
-						document.getElementById('filename_div').innerHTML = 'Loaded file: ' + file.name;
-						//console.log(files[0]);
-
-						if (slat_system.marking_domain_label) {
-							marker_label = slat_system.marking_domain_label;
-							console.log("Using domain label '" + marker_label + "' as the marker label.");
-						}
-
-						if (slat_system.uses_DNA_seqs) {
-							console.log("The loaded slat system uses DNA sequences as handle labels.");
-						}
-
-						const z_range = drawSlatSystem();
-						createLayerVisProps(z_range[0], z_range[1]);
-						destroyGuiFolders();
-				   		createGuiFolders();
+						loadSystemFromText(fr.result, file.name);
 					}
 					fr.readAsText(file);
-
-				   destroyGuiFolders();
-				   createGuiFolders();
 				}
 				input.click();
 			}
 
 			function destroyGuiFolders() {
+				b_gui_closed = gui._closed;	// lil-gui 0.17 has no public getter for this
 				gui.destroy();
 			}
 
 			function createGuiFolders() {
 				gui = new GUI({ container: document.getElementById('container_div') });
+				if (b_gui_closed) {
+					gui.close();
+				}
 				folderFile = gui.addFolder('File');
-				folderFile.add(propsFile, 'Load System');
+				if (!b_embedded) {
+					folderFile.add(propsFile, 'Load System');
+				}
 				folderFile.add(propsFile, 'Save System');
 				folderFile.close();
 
@@ -1058,6 +1258,7 @@
 				folderDrawingOptions.add(propsDrawing, 'Highlight Mismatches').onChange(function (value) {
 					b_show_mismatches = value;
 				});
+				folderDrawingOptions.add(propsDrawing, 'Fit View');
 				folderDrawingOptions.close();
 
 				folderSpaceVis = gui.addFolder('Space Visibility');
@@ -1117,6 +1318,10 @@
 				folderSim.$children.appendChild(transport_div);
 
 				folderSim.add(propsSim, 'Speed (steps/s)', 1, 500, 1);
+				binding_threshold_ctrl = folderSim.add(propsSim, 'Binding Threshold').min(1).step(1).onFinishChange(function (value) {
+					setBindingThreshold(value);
+				});
+				binding_threshold_ctrl.domElement.title = 'Changing this deletes any steps after the current step';
 				folderSim.add(propsSim, 'Simulate New Steps');
 				folderSim.add(propsSim, 'Steps to Simulate', 1, 100000, 1);
 				folderSim.add(propsSim, 'Simulate');
@@ -1181,6 +1386,12 @@
 				document.addEventListener( 'mousemove', onMouseOver );
 
 				document.addEventListener( 'keydown', onKeyDown );
+
+				window.addEventListener( 'message', onPageMessage );
+				if (page_params.get('system')) {
+					loadSystemFromURL(page_params.get('system'), page_params.get('name'));
+				}
+				sendToPage({type: 'slatsim:ready'});
 
 			}
 
