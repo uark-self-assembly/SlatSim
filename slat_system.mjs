@@ -5,7 +5,7 @@ class SlatSystem {
 	constructor(xml_node) {
 		this.binding_threshold = 1;
 		if (xml_node.querySelector("bindingThreshold")) {
-		    this.binding_threshold = xml_node.querySelector("bindingThreshold").textContent;
+		    this.binding_threshold = parseInt(xml_node.querySelector("bindingThreshold").textContent);
 		}
 		
 		this.slat_types = {};
@@ -134,6 +134,11 @@ class SlatSystem {
 		}
 		return num_steps;
 	}
+
+	// Remove all slats added to the main assembly after the given step
+	truncate_to_step(step) {
+		this.assembly.TruncateToStep(step, this.uses_DNA_seqs);
+	}
 }
 
 const dir_U = 0;
@@ -188,6 +193,26 @@ class SlatAssembly {
 			slat.set_from_type(slat_type);
 			slat.translate_to(translation);
 			this.AddSlat(slat, translation, step_added, uses_DNA_seqs);
+		}
+	}
+
+	// Remove the slats added after the given step by rebuilding the assembly from the slats that remain. They are
+	//   re-added in their original order, so the location map and frontier match what they were at that step.
+	TruncateToStep(step, uses_DNA_seqs) {
+		const kept_slats = this.slats.filter((slat_dict) => !(slat_dict['step_added'] > step));
+		this.slats = Array();
+		this.slat_keys = new Set();
+		this.location_map = {};
+		this.frontier = {};
+		this.last_step_added = 0;
+		for (const slat_dict of kept_slats) {
+			const slat = new SlatType();
+			slat.set_from_type(this.slat_types[slat_dict['slat_type_name']]);
+			slat.translate_to(slat_dict['translation']);
+			this.AddSlat(slat, slat_dict['translation'], slat_dict['step_added'], uses_DNA_seqs);
+			if (slat_dict['step_added'] > this.last_step_added) {
+				this.last_step_added = slat_dict['step_added'];
+			}
 		}
 	}
 

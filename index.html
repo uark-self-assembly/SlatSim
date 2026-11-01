@@ -216,6 +216,7 @@
 			const propsSim = {
 				'Current Step': 0,
 				'Speed (steps/s)': 10,
+				'Binding Threshold': 1,
 				'Simulate New Steps': true,
 				'Steps to Simulate': 100,
 				'Simulate': function() {
@@ -230,7 +231,7 @@
 			};
 
 			let folderFile, folderDrawingOptions, folderSpaceVis, folderSim = null;
-			let current_step_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
+			let current_step_ctrl, binding_threshold_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
 			let sim_status_div, play_back_button, play_fwd_button = null;
 
 			let loaded_file_name = 'No File Loaded';
@@ -335,6 +336,32 @@
 				}
 			}
 
+			// Change the binding threshold used for simulation. Steps after the current one were simulated with the old
+			//   threshold, so they are deleted.
+			function setBindingThreshold(value) {
+				if ((slat_system == null) || !Number.isFinite(value)) {
+					updateSimControls();
+					return;
+				}
+				value = Math.max(1, Math.round(value));
+				if (value === slat_system.binding_threshold) {
+					updateSimControls();
+					return;
+				}
+				pausePlay();
+				slat_system.binding_threshold = value;
+				if (current_step < assembly_max_step) {
+					console.log('[INFO] Binding threshold changed to ' + value + ', so deleting the steps after step ' + current_step + '.');
+					slat_system.truncate_to_step(current_step);
+					const system = slat_system;
+					clearDrawnSystem();
+					slat_system = system;
+					drawSlatSystem();
+				}
+				b_assembly_terminal = false;
+				updateSimControls();
+			}
+
 			function startPlay(direction) {
 				if ((direction > 0) && (current_step >= assembly_max_step) && !canSimulateMore()) {
 					return;
@@ -375,6 +402,10 @@
 
 			function updateSimControls() {
 				propsSim['Current Step'] = current_step;
+				propsSim['Binding Threshold'] = (slat_system != null) ? slat_system.binding_threshold : 1;
+				if (binding_threshold_ctrl) {
+					binding_threshold_ctrl.updateDisplay();
+				}
 				if (current_step_ctrl) {
 					current_step_ctrl.max(Math.max(1, assembly_max_step));
 					current_step_ctrl.updateDisplay();
@@ -870,6 +901,15 @@
 				}
 			}
 
+			// Remove the drawn system from the scene (this also sets slat_system to null)
+			function clearDrawnSystem() {
+				clearScene(scene);
+				init2(false);
+				for (const coords in domain_map) {
+					delete domain_map[coords];
+				}
+			}
+
 			function clearScene(obj){
 				while(obj.children.length > 0){
 					clearScene(obj.children[0]);
@@ -996,11 +1036,7 @@
 						const xmlDoc = parser.parseFromString(xml_string, "text/xml");
 
 						// Remove any previously loaded system from the scene
-						clearScene(scene);
-						init2(false);
-						for (const coords in domain_map) {
-							delete domain_map[coords];
-						}
+						clearDrawnSystem();
 						marker_label = null;
 
 						const system_node = xmlDoc.querySelector("PolyominoSystem");
@@ -1117,6 +1153,10 @@
 				folderSim.$children.appendChild(transport_div);
 
 				folderSim.add(propsSim, 'Speed (steps/s)', 1, 500, 1);
+				binding_threshold_ctrl = folderSim.add(propsSim, 'Binding Threshold').min(1).step(1).onFinishChange(function (value) {
+					setBindingThreshold(value);
+				});
+				binding_threshold_ctrl.domElement.title = 'Changing this deletes any steps after the current step';
 				folderSim.add(propsSim, 'Simulate New Steps');
 				folderSim.add(propsSim, 'Steps to Simulate', 1, 100000, 1);
 				folderSim.add(propsSim, 'Simulate');
