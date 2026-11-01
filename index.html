@@ -6,7 +6,6 @@
 		A system (in the form of an XML file) can be dragged and dropped over the "Choose file" button at the top.
 
 		[TODO]
-		- allow reloading of systems without requiring page refresh
 		- mark mismatched/unbound domains
 		- allow transparency of layers
 		- mouseover display of actual coords and slat coords
@@ -51,6 +50,40 @@
 				cursor: move;
 				user-select: none;
 				opacity: 0.8;
+			}
+
+			.sim-status {
+				padding: 4px 8px;
+				color: var(--text-color);
+				font-weight: 600;
+			}
+
+			.sim-transport {
+				display: flex;
+				gap: 2px;
+				padding: 2px 4px 4px 4px;
+			}
+
+			.sim-transport button {
+				flex: 1;
+				min-width: 0;
+				height: 22px;
+				padding: 0;
+				border: none;
+				border-radius: 3px;
+				background: var(--widget-color);
+				color: var(--text-color);
+				font-size: 12px;
+				cursor: pointer;
+			}
+
+			.sim-transport button:hover {
+				background: var(--hover-color);
+			}
+
+			.sim-transport button.active {
+				background: var(--text-color);
+				color: #ffffff;
 			}
 
 			#mouse_over_div {
@@ -148,15 +181,16 @@
 			let b_draw_handles = true;
 			let b_draw_markers = true;
 
-			let assembly_max_step = 0;
-			let max_visible_step = 0;
-			let visisble_step_increment = 1;
+			// Simulation / playback state
+			let assembly_max_step = 0;		// The last step that exists in the assembly (loaded or simulated)
+			let current_step = 0;			// Slats added after this step are hidden
+			let play_direction = 0;			// 1 = playing forward, -1 = playing backward, 0 = paused
+			let play_accumulator = 0;		// Fractional steps accumulated between animation frames
+			let b_assembly_terminal = false;	// Set once simulation finds that no more slats can attach
+			let drawn_assembly_slat_count = 0;	// Number of slats of slat_system.assembly already added to the scene
+			let drawn_slat_keys = new Set();	// Slats already drawn, so seed slats that also appear in the assembly are drawn once
 
 			const domain_map = {};
-
-			let intervalId = null;
-			let intervalVal = 500;
-			let b_is_playing = false;
 
 			let gui = null;
 
@@ -179,28 +213,25 @@
 				'Y Range': '*:*',
 				'Z Range': '*:*',
 			};
-			const propsSteps = {
-				'Max Visible Step': 0,
-				'Set Current Step': function() {
-					resetMaxVisStep();
+			const propsSim = {
+				'Current Step': 0,
+				'Speed (steps/s)': 10,
+				'Simulate New Steps': true,
+				'Steps to Simulate': 100,
+				'Simulate': function() {
+					pausePlay();
+					if (simulateSteps(propsSim['Steps to Simulate']) > 0) {
+						goToStep(assembly_max_step);
+					}
 				},
-				'Step': function() {
-					incrementVisStep();
-				},
-				'Start': function() {
-					startPlay();
-				},
-				'Stop': function() {
-					stopPlay();
-				},
-				'Step Speed': 1.0,
 			};
 			const propsMouse = {
 				'Display mouse location info': true,
 			};
 
-			let folderFile, folderDrawingOptions, folderSpaceVis, folderSteps = null;
-			let max_vis_steps_ctrl, steps_speed_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
+			let folderFile, folderDrawingOptions, folderSpaceVis, folderSim = null;
+			let current_step_ctrl, x_range_ctrl, y_range_ctrl,z_range_ctrl = null;
+			let sim_status_div, play_back_button, play_fwd_button = null;
 
 			let loaded_file_name = 'No File Loaded';
 
@@ -258,60 +289,141 @@
 				//console.log('change!' + x_range_str + ', ' + viewable_x_range + ", " + y_range_str + ', ' + viewable_y_range + ", " + viewable_z_range);
 			}
 
-			function rangeSpeedClick() {
-				const speed = steps_speed_ctrl.getValue();
+			//////////////////////////////////////////////////////////////
+			// Simulation and playback
 
-				intervalVal = 1000 - (10 * speed) + 1;
-				if (speed <= 90) {
-					visisble_step_increment = 1;
+			// Whether stepping forward from the last existing step can add new slats by simulation
+			function canSimulateMore() {
+				return (slat_system != null) && propsSim['Simulate New Steps'] && !b_assembly_terminal;
+			}
+
+			// Simulate up to num_steps new slat additions onto the full assembly and draw the new slats.
+			// Returns the number of slats added.
+			function simulateSteps(num_steps) {
+				if ((slat_system == null) || b_assembly_terminal || (num_steps < 1)) {
+					return 0;
+				}
+				const num_added = slat_system.simulate_steps(num_steps);
+				if (num_added < num_steps) {
+					b_assembly_terminal = true;
+					console.log('[INFO] No more slats can attach to the assembly.');
+				}
+				if (num_added > 0) {
+					drawNewAssemblySlats();
+				}
+				updateSimControls();
+				return num_added;
+			}
+
+			// Show the assembly as it was at the given step (clamped to the steps that exist)
+			function goToStep(step) {
+				current_step = Math.max(0, Math.min(Math.round(step), assembly_max_step));
+				updateSimControls();
+			}
+
+			// Move num_steps forward (positive) or backward (negative), simulating new steps past the end if enabled
+			function stepBy(num_steps) {
+				const target = current_step + num_steps;
+				if ((target > assembly_max_step) && canSimulateMore()) {
+					simulateSteps(target - assembly_max_step);
+				}
+				goToStep(target);
+
+				const b_at_end = (current_step >= assembly_max_step) && !canSimulateMore();
+				if (((play_direction > 0) && b_at_end) || ((play_direction < 0) && (current_step <= 0))) {
+					pausePlay();
+				}
+			}
+
+			function startPlay(direction) {
+				if ((direction > 0) && (current_step >= assembly_max_step) && !canSimulateMore()) {
+					return;
+				}
+				if ((direction < 0) && (current_step <= 0)) {
+					return;
+				}
+				play_direction = direction;
+				play_accumulator = 1;	// Take the first step immediately
+				updateSimControls();
+			}
+
+			function pausePlay() {
+				play_direction = 0;
+				updateSimControls();
+			}
+
+			function togglePlay() {
+				if (play_direction !== 0) {
+					pausePlay();
 				} else {
-					visisble_step_increment = speed - 90;
-				}
-
-				//console.log('New speed: ' + intervalVal);
-				if (b_is_playing) {
-					stopPlay();
-					startPlay();
+					startPlay(1);
 				}
 			}
 
-			function startPlay() {
-				max_visible_step = max_vis_steps_ctrl.getValue();
-				if (max_visible_step > assembly_max_step) {
-					const num_steps = max_visible_step - assembly_max_step;
-					console.log(' About to simulate ' + num_steps + ' steps...');
-					slat_system.simulate_steps(num_steps);
-					console.log(' Simulation complete. Redrawing assembly.');
-					drawSlatSystem();
-					//assembly_max_step = max_visible_step;
+			// Advance playback according to the time elapsed since the last animation frame
+			function updatePlayback(delta) {
+				if (play_direction === 0) {
+					return;
 				}
-
-				b_is_playing = true;
-				intervalId = window.setInterval(function(){incrementVisStep()}, intervalVal);
-			}
-
-			function stopPlay() {
-				b_is_playing = false;
-				if (intervalId) {
-					window.clearInterval(intervalId);
+				play_accumulator += Math.min(delta, 0.25) * propsSim['Speed (steps/s)'];
+				const num_steps = Math.floor(play_accumulator);
+				if (num_steps > 0) {
+					play_accumulator -= num_steps;
+					stepBy(play_direction * num_steps);
 				}
 			}
 
-			function incrementVisStep() {
-				if (max_visible_step < assembly_max_step) {
-					max_visible_step += visisble_step_increment;
-					if (max_visible_step > assembly_max_step) {
-						max_visible_step = assembly_max_step;
+			function updateSimControls() {
+				propsSim['Current Step'] = current_step;
+				if (current_step_ctrl) {
+					current_step_ctrl.max(Math.max(1, assembly_max_step));
+					current_step_ctrl.updateDisplay();
+				}
+				if (sim_status_div) {
+					let status = 'Step ' + current_step + ' of ' + assembly_max_step;
+					if (slat_system == null) {
+						status = 'No system loaded';
+					} else if (b_assembly_terminal) {
+						status += ' (terminal)';
 					}
-					//console.log('max visible step: ' + max_visible_step + ", intervalVal: " + intervalVal + ", visisble_step_increment" + visisble_step_increment);
-				} else {
-					stopPlay();
+					sim_status_div.textContent = status;
 				}
-				max_vis_steps_ctrl.setValue(max_visible_step);
+				if (play_back_button) {
+					play_back_button.classList.toggle('active', play_direction < 0);
+					play_fwd_button.classList.toggle('active', play_direction > 0);
+				}
 			}
 
-			function resetMaxVisStep() {
-				max_visible_step = max_vis_steps_ctrl.getValue();
+			function onKeyDown(event) {
+				if ((slat_system == null) || (event.target.tagName === 'INPUT') || event.metaKey || event.ctrlKey || event.altKey) {
+					return;
+				}
+				if (event.key === 'ArrowRight') {
+					if (event.shiftKey) {
+						startPlay(1);
+					} else {
+						pausePlay();
+						stepBy(1);
+					}
+				} else if (event.key === 'ArrowLeft') {
+					if (event.shiftKey) {
+						startPlay(-1);
+					} else {
+						pausePlay();
+						stepBy(-1);
+					}
+				} else if (event.key === ' ') {
+					togglePlay();
+				} else if (event.key === 'Home') {
+					pausePlay();
+					goToStep(0);
+				} else if (event.key === 'End') {
+					pausePlay();
+					goToStep(assembly_max_step);
+				} else {
+					return;
+				}
+				event.preventDefault();
 			}
 
 			function writeOutputMessage(message) {
@@ -325,32 +437,24 @@
 
 			function drawSlatSystem() {
 				let system_vals1 = [null, null, null];
-				let system_vals2 = [null, null, null];
+
+				drawn_slat_keys = new Set();
+				drawn_assembly_slat_count = 0;
+				assembly_max_step = 0;
+				b_assembly_terminal = false;
+				play_direction = 0;
 
 				if ((slat_system.seed_assembly != null) && (slat_system.seed_assembly.slats.length > 0)) {
 					 system_vals1 = add_slats_to_scene(slat_system.seed_assembly.slats, slat_system.slat_types);
 				}
-				if ((slat_system.assembly != null) && (slat_system.assembly.slats.length > 0)) {
-					system_vals2 = add_slats_to_scene(slat_system.assembly.slats, slat_system.slat_types);
-				}
+				const system_vals2 = drawNewAssemblySlats();
+
+				// Start by showing every step that the loaded assembly already contains
+				current_step = assembly_max_step;
+				updateSimControls();
 
 				const z_range1 = [system_vals1[0], system_vals1[1]];
 				const z_range2 = [system_vals2[0], system_vals2[1]];
-				const max_step_added = (system_vals1[2] > system_vals2[2]) ? system_vals1[2] : system_vals2[2];
-				if ((max_step_added) && (max_step_added > 0)) {
-					//document.getElementById('playback_controls_span').style.visibility = 'visible';
-					//document.getElementById('no_playback_controls_span').style.visibility = 'hidden';
-					//document.getElementById('tb_max_vis_step').value = max_step_added;
-					max_vis_steps_ctrl.setValue(max_step_added);
-					max_visible_step = max_step_added;
-					assembly_max_step = max_step_added;
-				} else {
-					//document.getElementById('playback_controls_span').style.visibility = 'hidden';
-					//document.getElementById('no_playback_controls_span').style.visibility = 'visible';
-					//document.getElementById('tb_max_vis_step').value = 0;
-					max_vis_steps_ctrl.setValue(0);
-					assembly_max_step = 0;
-				}
 
 				let z_range = [null, null];
 				if (z_range1[0] == null) {
@@ -371,12 +475,31 @@
 				return z_range;
 			}
 
+			// Draw the slats of the assembly that haven't been drawn yet (e.g. ones just added by simulation)
+			function drawNewAssemblySlats() {
+				let system_vals = [null, null, 0];
+				if (slat_system.assembly != null) {
+					const new_slats = slat_system.assembly.slats.slice(drawn_assembly_slat_count);
+					drawn_assembly_slat_count = slat_system.assembly.slats.length;
+					system_vals = add_slats_to_scene(new_slats, slat_system.slat_types);
+					if (system_vals[2] > assembly_max_step) {
+						assembly_max_step = system_vals[2];
+					}
+				}
+				return system_vals;
+			}
+
 			function add_slats_to_scene(slats, slat_types) {
 				let min_z = null;
 				let max_z = null;
 				let max_step_added = 0;
 				for (let i=0; i < slats.length; i++) {
 					const slat_dict = slats[i];
+					const slat_key = slat_dict['slat_type_name'] + '@' + slat_dict['translation'];
+					if (drawn_slat_keys.has(slat_key)) {
+						continue;
+					}
+					drawn_slat_keys.add(slat_key);
 					const slat_type_name = slat_dict['slat_type_name'];
 					const slat_type = slat_types[slat_type_name];
 					const translation = slat_dict['translation'];
@@ -510,6 +633,7 @@
 											mismatch_object.userData.obb.global_slat_coords = global_coords;
 											mismatch_object.userData.obb.local_block_coords = local_coords;
 											mismatch_object.userData.obb.type_hint = 'mismatch';
+											mismatch_object.userData.obb.step_added = step_added;	// The mismatch appears when this slat is added
 											scene.add(mismatch_object);
 											object_list.push(mismatch_object);
 
@@ -871,6 +995,14 @@
 						const parser = new DOMParser();
 						const xmlDoc = parser.parseFromString(xml_string, "text/xml");
 
+						// Remove any previously loaded system from the scene
+						clearScene(scene);
+						init2(false);
+						for (const coords in domain_map) {
+							delete domain_map[coords];
+						}
+						marker_label = null;
+
 						const system_node = xmlDoc.querySelector("PolyominoSystem");
 						slat_system = new SlatSystem(system_node);
 						//console.log("Loaded slat system.");
@@ -947,16 +1079,48 @@
 				}
 				folderSpaceVis.close();
 
-				folderSteps = gui.addFolder('Assembly Step');
-				max_vis_steps_ctrl = folderSteps.add(propsSteps, 'Max Visible Step')
-				folderSteps.add(propsSteps, 'Set Current Step')
-				folderSteps.add(propsSteps, 'Step');
-				folderSteps.add(propsSteps, 'Start')
-				folderSteps.add(propsSteps, 'Stop')
-				steps_speed_ctrl = folderSteps.add(propsSteps, 'Step Speed', 1, 200, 1).onChange(function (value) {
-					rangeSpeedClick();
+				folderSim = gui.addFolder('Simulation');
+				sim_status_div = document.createElement('div');
+				sim_status_div.className = 'sim-status';
+				folderSim.$children.appendChild(sim_status_div);
+
+				current_step_ctrl = folderSim.add(propsSim, 'Current Step', 0, 1, 1).onChange(function (value) {
+					pausePlay();
+					goToStep(value);
 				});
-				folderSteps.close();
+
+				// Transport buttons: [label, tooltip, action]
+				const transport_div = document.createElement('div');
+				transport_div.className = 'sim-transport';
+				const transport_buttons = [
+					['⏮︎', 'Go to step 0 (Home)', function() { pausePlay(); goToStep(0); }],
+					['⏪︎', 'Play backward (Shift+Left)', function() { startPlay(-1); }],
+					['◀︎', 'Step backward (Left)', function() { pausePlay(); stepBy(-1); }],
+					['⏸︎', 'Pause (Space)', function() { pausePlay(); }],
+					['▶︎', 'Step forward (Right)', function() { pausePlay(); stepBy(1); }],
+					['⏩︎', 'Play forward (Shift+Right)', function() { startPlay(1); }],
+					['⏭︎', 'Go to last step (End)', function() { pausePlay(); goToStep(assembly_max_step); }],
+				];
+				const buttons = transport_buttons.map(function ([label, title, action]) {
+					const button = document.createElement('button');
+					button.textContent = label;
+					button.title = title;
+					button.addEventListener('click', function (event) {
+						event.stopPropagation();
+						action();
+					});
+					transport_div.appendChild(button);
+					return button;
+				});
+				play_back_button = buttons[1];
+				play_fwd_button = buttons[5];
+				folderSim.$children.appendChild(transport_div);
+
+				folderSim.add(propsSim, 'Speed (steps/s)', 1, 500, 1);
+				folderSim.add(propsSim, 'Simulate New Steps');
+				folderSim.add(propsSim, 'Steps to Simulate', 1, 100000, 1);
+				folderSim.add(propsSim, 'Simulate');
+				updateSimControls();
 
 				gui.add( propsMouse, 'Display mouse location info' ).onChange(function (value) {
 					b_display_mouseover = value;
@@ -1015,6 +1179,8 @@
 				document.addEventListener( 'click', onClick );
 
 				document.addEventListener( 'mousemove', onMouseOver );
+
+				document.addEventListener( 'keydown', onKeyDown );
 
 			}
 
@@ -1122,9 +1288,7 @@
 
 				controls.update();
 
-				if (b_is_playing) {
-					max_vis_steps_ctrl.setValue(max_visible_step);
-				}
+				updatePlayback(clock.getDelta());
 
 				// transform cubes
 
@@ -1143,7 +1307,7 @@
 
 						let b_visible = true;
 
-						if (object.userData.obb.step_added > max_visible_step) {
+						if (object.userData.obb.step_added > current_step) {
 							b_visible = false;
 						} else if (object.userData.obb.type_hint === 'domain') {
 							b_visible = b_show_domains;
