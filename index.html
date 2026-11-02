@@ -58,6 +58,11 @@
 				font-weight: 600;
 			}
 
+			.domain-type {
+				padding: 4px 8px;
+				color: var(--text-color);
+			}
+
 			.sim-transport {
 				display: flex;
 				gap: 2px;
@@ -161,7 +166,6 @@
 
 			let marker_label = null;
 
-			let viewable_layers = [true, true, true];
 			let viewable_x_range = [null, null];
 			let viewable_y_range = [null, null];
 			let viewable_z_range = [null, null];
@@ -208,9 +212,6 @@
 					fitViewToSystem();
 				},
 			};
-			let propsLayers = {
-				'Layer 0': true,
-			}
 			const propsSpaceVis = {
 				'X Range': '*:*',
 				'Y Range': '*:*',
@@ -259,14 +260,6 @@
 				clearScene(scene);
 				init2(b_reset_camera);
 				document.getElementById('loaded_file_name').innerHTML = 'No file loaded';
-			}
-
-			function createLayerVisProps(min_layer, max_layer) {
-				propsLayers = {}
-				for (let i=min_layer; i<=max_layer; i++) {
-					propsLayers['Layer ' + i] = true;
-					viewable_layers[i] = true;
-				}
 			}
 
 			function getRange(range_str) {
@@ -1126,8 +1119,7 @@
 					console.log("The loaded slat system uses DNA sequences as handle labels.");
 				}
 
-				const z_range = drawSlatSystem();
-				createLayerVisProps(z_range[0], z_range[1]);
+				drawSlatSystem();
 				destroyGuiFolders();
 				createGuiFolders();
 				fitViewToSystem();
@@ -1271,13 +1263,6 @@
 				z_range_ctrl = folderSpaceVis.add(propsSpaceVis, 'Z Range').onFinishChange(function (value) {
 					visRangeChange();
 				})
-				for (let prop in propsLayers) {
-					folderSpaceVis.add(propsLayers, prop).onChange(function (value) {
-						console.log(prop.split(' ') + ', ' + value);
-						viewable_layers[prop.split(' ')[1]] = value;
-						console.log(viewable_layers);
-					});
-				}
 				folderSpaceVis.close();
 
 				folderSim = gui.addFolder('Simulation');
@@ -1330,6 +1315,13 @@
 				gui.add( propsMouse, 'Display mouse location info' ).onChange(function (value) {
 					b_display_mouseover = value;
 				});
+
+				if (slat_system) {
+					const domain_type_div = document.createElement('div');
+					domain_type_div.className = 'domain-type';
+					domain_type_div.textContent = 'Domains use ' + (slat_system.uses_DNA_seqs ? 'DNA sequences' : 'labels');
+					gui.$children.appendChild(domain_type_div);
+				}
 			}
 
 			init();
@@ -1536,10 +1528,6 @@
 							const x = object.userData.obb.global_slat_coords.x + object.userData.obb.local_block_coords[0];
 							const y = object.userData.obb.global_slat_coords.y + object.userData.obb.local_block_coords[1];
 							const z = object.userData.obb.global_slat_coords.z + object.userData.obb.local_block_coords[2];
-
-							if (viewable_layers[z] === false) {
-								b_visible = false;
-							}
 
 							if ((viewable_x_range[0] != null) && (x < viewable_x_range[0])) {
 								b_visible = false;
