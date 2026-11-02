@@ -468,6 +468,26 @@ class SlatAssembly {
 	}
 }
 
+// Elements of a slat type or domain that SlatSim doesn't use itself (for example the scaffold_sequence,
+// scaffold_nick_indices and scaffold_start_index of a DNA slat type, or a domain's io_dir_hint and strength)
+// are kept as XML strings and written back unchanged, so saving a system doesn't lose them.
+function otherElements(xml_node, known_tags) {
+	const out = [];
+	for (const child of xml_node.children) {
+		if (!known_tags.includes(child.tagName)) {
+			out.push(new XMLSerializer().serializeToString(child));
+		}
+	}
+	return out;
+}
+
+function appendOtherElements(xmlDoc, xml_node, other_elements) {
+	for (const xml_string of other_elements || []) {
+		const element = new DOMParser().parseFromString(xml_string, 'text/xml').documentElement;
+		xml_node.appendChild(xmlDoc.importNode(element, true));
+	}
+}
+
 class SlatType {
 	constructor() {
 		this.name = null;
@@ -476,6 +496,7 @@ class SlatType {
 		this.blocks = [];
 		this.domains = {};
 		this.domains_lists = {};
+		this.other_elements = [];
 	}
 
 	set_from_type(slat_type) {
@@ -483,6 +504,7 @@ class SlatType {
 			this.name = slat_type.name;
 			this.color = slat_type.color;
 			this.b_seed_only = slat_type.b_seed_only;
+			this.other_elements = slat_type.other_elements.slice();
 
 			for (let j = 0; j < slat_type.blocks.length; j++) {
 				const num_block = [parseInt(slat_type.blocks[j][0]), parseInt(slat_type.blocks[j][1]), parseInt(slat_type.blocks[j][2])];
@@ -518,6 +540,8 @@ class SlatType {
 			xml_node.appendChild(lElement);
 		}
 
+		appendOtherElements(xmlDoc, xml_node, this.other_elements);
+
 		const blocksElement = xmlDoc.createElement('blocks');
 		for (let b = 0; b < this.blocks.length; b++) {
 			const block = this.blocks[b];
@@ -539,6 +563,8 @@ class SlatType {
 					const dirElement = xmlDoc.createElement('direction');
 					dirElement.textContent = this.domains[block][d]['direction'];
 					domainElement.appendChild(dirElement);
+
+					appendOtherElements(xmlDoc, domainElement, this.domains[block][d]['other_elements']);
 
 					domainsElement.appendChild(domainElement);
 				}
@@ -566,6 +592,7 @@ class SlatType {
 				this.b_seed_only = true;
 			}
 		}
+		this.other_elements = otherElements(xml_node, ['name', 'color', 'concentration', 'b_seed_only', 'blocks']);
 
 		const blocks_node = xml_node.querySelector("blocks");
 		const blocks = blocks_node.querySelectorAll("block");
@@ -580,7 +607,8 @@ class SlatType {
 					const domain_node = domains[j];
 					const label = domain_node.querySelector("label").textContent;
 					const direction = domain_node.querySelector("direction").textContent;
-					const domain_dict = {'label': label, 'direction': direction};
+					const domain_dict = {'label': label, 'direction': direction,
+										 'other_elements': otherElements(domain_node, ['label', 'direction'])};
 					if (domain_node.querySelector("color")) {
 						domain_dict['color'] = domain_node.querySelector("color").textContent;
 					}
