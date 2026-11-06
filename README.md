@@ -35,7 +35,8 @@ The system lists the modifications it uses, with a colour for each, in a top-lev
 </modifications>
 ```
 
-Each modified domain gets a small block in its modification's colour at the tip of its handle (magenta if the
+Each modified domain gets a thin block in its modification's colour, wider than the domain, on its own side of
+its handle tip, so the blocks of two bound modified domains sit one above the other (magenta if the
 modification has no colour); **Drawing Options → View Modifications** shows or hides them, and the mouse-over
 information names the modification. Saving keeps both.
 

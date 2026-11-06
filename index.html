@@ -155,7 +155,9 @@
 			const handle_radius = 1;
 			const handle_height = 3;
 			const marker_cube_dim = 10;
-			const modification_cube_dim = 4;
+			// Blocks marking modified domains: wider than a domain (so they show around it) and thin along the handle
+			const modification_block_width = (2 * domain_radius) + 2;
+			const modification_block_depth = 2;
 			const mismatch_cube_dim = (domain_radius * 4) + (handle_height * 2);
 			const end_shrinkage = 2;
 			const num_sides_rendered = 6;
@@ -893,20 +895,27 @@
 										drawn_slat_type.cylinder_objects_list.push(marker_object);
 									}
 
-									// A small block, in the modification's color, around the tip of a modified domain's handle
+									// A thin block, in the modification's color and wider than the domain, at the tip of a modified domain's
+									//   handle. It covers only the side of the tip toward this slat: a bound partner's handle tip is at the
+									//   same point, so the partner's modification block (if it has one) sits just beyond and both can be seen.
 									const modification = domain_dict['modification'];
 									if (modification) {
 										const outward = {'U': [0,0,1], 'D': [0,0,-1], 'N': [0,1,0], 'S': [0,-1,0], 'E': [1,0,0], 'W': [-1,0,0]}[domain_direction];
 										const modification_position = handle_position.clone();
-										modification_position.x += outward[0] * handle_height / 2;
-										modification_position.y += outward[1] * handle_height / 2;
-										modification_position.z += outward[2] * handle_height / 2;
+										const offset = (handle_height / 2) - (modification_block_depth / 2);
+										modification_position.x += outward[0] * offset;
+										modification_position.y += outward[1] * offset;
+										modification_position.z += outward[2] * offset;
 										const color = slat_system.modifications[modification] || 'magenta';
 										if (!(color in modification_materials)) {
 											modification_materials[color] = new THREE.MeshLambertMaterial({color: color});
 										}
 										const modification_object = new THREE.Mesh(modification_cube, modification_materials[color]);
 										modification_object.position.copy(modification_position);
+										modification_object.scale.set(
+											outward[0] ? modification_block_depth : modification_block_width,
+											outward[1] ? modification_block_depth : modification_block_width,
+											outward[2] ? modification_block_depth : modification_block_width);
 										modification_object.matrixAutoUpdate = false;
 										modification_object.userData.obb = new OBB();
 										modification_object.userData.obb.slat_name = slat_type.name;
@@ -1009,11 +1018,11 @@
 				marker_material = new THREE.MeshLambertMaterial({color: 'black'});
 
 				////////////////////////////////////////////////
-				// Cube for domains with a modification (e.g. an indirect label), drawn in the modification's color
-				modification_cube = new THREE.BoxGeometry( modification_cube_dim, modification_cube_dim, modification_cube_dim );
+				// Unit box for domains with a modification (e.g. an indirect label), drawn in the modification's color and
+				//   scaled to modification_block_width x modification_block_depth for each domain's direction
+				modification_cube = new THREE.BoxGeometry( 1, 1, 1 );
 				modification_cube.userData.obb = new OBB();
-				const size6 = new THREE.Vector3( modification_cube_dim, modification_cube_dim, modification_cube_dim );
-				modification_cube.userData.obb.halfSize.copy(size6).multiplyScalar(0.5);
+				modification_cube.userData.obb.halfSize.set(0.5, 0.5, 0.5);
 
 				////////////////////////////////////////////////
 				// Cube for the 'mismatch markers'
