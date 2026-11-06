@@ -266,19 +266,19 @@
 				document.getElementById('loaded_file_name').innerHTML = 'No file loaded';
 			}
 
+			// A visibility range: "min:max" (either side '*' or empty for no limit), or a single value for just that
+			//   coordinate. Returns [min, max] with null for no limit.
 			function getRange(range_str) {
-				let min_range = null;
-				let max_range = null;
-				if ((range_str.length > 0) && (range_str != '*')) {
-					const range_arr = range_str.split(':');
-					if (range_arr[0] != '*') {
-						min_range = parseInt(range_arr[0]);
-					}
-					if (range_arr[1] != '*') {
-						max_range = parseInt(range_arr[1]);
-					}
+				const parseBound = function (bound_str) {
+					const value = parseInt(bound_str.trim());
+					return isNaN(value) ? null : value;
+				};
+				const range_arr = range_str.split(':');
+				if (range_arr.length === 1) {
+					const value = parseBound(range_arr[0]);
+					return [value, value];
 				}
-				return [min_range, max_range];
+				return [parseBound(range_arr[0]), parseBound(range_arr[1])];
 			}
 
 			function visRangeChange() {
