@@ -31,6 +31,22 @@ class SlatSystem {
 			this.marking_domain_label = xml_node.querySelector("marking_domain_label").textContent;
 		}
 
+		// The kinds of domain modification the system uses (e.g. indirect labels): name -> display color.
+		//   Domains name theirs in a <modification> element of their own.
+		this.modifications = {};
+		for (const child of xml_node.children) {
+			if (child.tagName !== 'modifications') {
+				continue;
+			}
+			for (const modification_node of child.children) {
+				const name_node = modification_node.querySelector("name");
+				if ((modification_node.tagName === 'modification') && name_node) {
+					const color_node = modification_node.querySelector("color");
+					this.modifications[name_node.textContent] = color_node ? color_node.textContent : null;
+				}
+			}
+		}
+
 		const seed_node = xml_node.querySelector("seed");
 		const assembly_node = xml_node.querySelector("assembly");
 
@@ -83,6 +99,23 @@ class SlatSystem {
 			lElement = xmlDoc.createElement('marking_domain_label');
 			lElement.textContent = this.marking_domain_label;
 			rootEle.appendChild(lElement);
+		}
+
+		if (Object.keys(this.modifications).length > 0) {
+			const modificationsEle = xmlDoc.createElement('modifications');
+			for (const name in this.modifications) {
+				const modificationEle = xmlDoc.createElement('modification');
+				lElement = xmlDoc.createElement('name');
+				lElement.textContent = name;
+				modificationEle.appendChild(lElement);
+				if (this.modifications[name] !== null) {
+					lElement = xmlDoc.createElement('color');
+					lElement.textContent = this.modifications[name];
+					modificationEle.appendChild(lElement);
+				}
+				modificationsEle.appendChild(modificationEle);
+			}
+			rootEle.appendChild(modificationsEle);
 		}
 
 		const slatTypesEle = xmlDoc.createElement('PolyominoTypes');
@@ -611,6 +644,10 @@ class SlatType {
 										 'other_elements': otherElements(domain_node, ['label', 'direction'])};
 					if (domain_node.querySelector("color")) {
 						domain_dict['color'] = domain_node.querySelector("color").textContent;
+					}
+					// Kept in other_elements too, so it is saved unchanged
+					if (domain_node.querySelector("modification")) {
+						domain_dict['modification'] = domain_node.querySelector("modification").textContent;
 					}
 					if (coords in this.domains) {
 						this.domains[coords].push(domain_dict)

@@ -155,11 +155,13 @@
 			const handle_radius = 1;
 			const handle_height = 3;
 			const marker_cube_dim = 10;
+			const modification_cube_dim = 4;
 			const mismatch_cube_dim = (domain_radius * 4) + (handle_height * 2);
 			const end_shrinkage = 2;
 			const num_sides_rendered = 6;
 
-			let domain_cylinder, domain_edges, end_domain_cylinder, end_domain_edges, handle_cylinder, marker_cube, marker_material, mismatch_cube, mismatch_material;
+			let domain_cylinder, domain_edges, end_domain_cylinder, end_domain_edges, handle_cylinder, marker_cube, marker_material, mismatch_cube, mismatch_material, modification_cube;
+			let modification_materials = {};
 			let slat_system = null;
 			let colored_materials = {};
 			let drawn_slat_types = {};
@@ -178,6 +180,7 @@
 			let b_show_lines = true;
 			let b_show_handles = true;
 			let b_show_markers = true;
+			let b_show_modifications = true;
 			let b_show_mismatches = true;
 
 			// The following three values are currently obsolete
@@ -207,6 +210,7 @@
 				'View Lines': true,
 				'View Domains': true,
 				'View Markers': true,
+				'View Modifications': true,
 				'Highlight Mismatches': true,
 				'Fit View': function() {
 					fitViewToSystem();
@@ -817,7 +821,7 @@
 								const domain_direction = domain_dict['direction'];
 
 								//domain_listing += '[' + domain_direction + '] ' + domain_label + '\n';
-								domain_listing.push([domain_direction, domain_label]);
+								domain_listing.push([domain_direction, domain_label, domain_dict['modification']]);
 
 								if (b_draw_handles || b_draw_markers) {
 
@@ -887,6 +891,28 @@
 										marker_object.userData.obb.local_block_coords = block;
 										marker_object.userData.obb.type_hint = 'marker';
 										drawn_slat_type.cylinder_objects_list.push(marker_object);
+									}
+
+									// A small block, in the modification's color, around the tip of a modified domain's handle
+									const modification = domain_dict['modification'];
+									if (modification) {
+										const outward = {'U': [0,0,1], 'D': [0,0,-1], 'N': [0,1,0], 'S': [0,-1,0], 'E': [1,0,0], 'W': [-1,0,0]}[domain_direction];
+										const modification_position = handle_position.clone();
+										modification_position.x += outward[0] * handle_height / 2;
+										modification_position.y += outward[1] * handle_height / 2;
+										modification_position.z += outward[2] * handle_height / 2;
+										const color = slat_system.modifications[modification] || 'magenta';
+										if (!(color in modification_materials)) {
+											modification_materials[color] = new THREE.MeshLambertMaterial({color: color});
+										}
+										const modification_object = new THREE.Mesh(modification_cube, modification_materials[color]);
+										modification_object.position.copy(modification_position);
+										modification_object.matrixAutoUpdate = false;
+										modification_object.userData.obb = new OBB();
+										modification_object.userData.obb.slat_name = slat_type.name;
+										modification_object.userData.obb.local_block_coords = block;
+										modification_object.userData.obb.type_hint = 'modification';
+										drawn_slat_type.cylinder_objects_list.push(modification_object);
 									}
 								}
 							}
@@ -981,6 +1007,13 @@
 				const size4 = new THREE.Vector3( marker_cube_dim, marker_cube_dim, marker_cube_dim );
 				marker_cube.userData.obb.halfSize.copy(size4).multiplyScalar(0.5);
 				marker_material = new THREE.MeshLambertMaterial({color: 'black'});
+
+				////////////////////////////////////////////////
+				// Cube for domains with a modification (e.g. an indirect label), drawn in the modification's color
+				modification_cube = new THREE.BoxGeometry( modification_cube_dim, modification_cube_dim, modification_cube_dim );
+				modification_cube.userData.obb = new OBB();
+				const size6 = new THREE.Vector3( modification_cube_dim, modification_cube_dim, modification_cube_dim );
+				modification_cube.userData.obb.halfSize.copy(size6).multiplyScalar(0.5);
 
 				////////////////////////////////////////////////
 				// Cube for the 'mismatch markers'
@@ -1247,6 +1280,9 @@
 				folderDrawingOptions.add(propsDrawing, 'View Markers').onChange(function (value) {
 					b_show_markers = value;
 				});
+				folderDrawingOptions.add(propsDrawing, 'View Modifications').onChange(function (value) {
+					b_show_modifications = value;
+				});
 				folderDrawingOptions.add(propsDrawing, 'Highlight Mismatches').onChange(function (value) {
 					b_show_mismatches = value;
 				});
@@ -1442,7 +1478,7 @@
 							if (intersections[0].object.userData.obb.domain_listing) {
 								const domain_listing = intersections[0].object.userData.obb.domain_listing;
 								for (const domain of domain_listing) {
-									message += '   ' + dir_names[domain[0]] + ': ' + domain[1] + '\n';
+									message += '   ' + dir_names[domain[0]] + ': ' + domain[1] + (domain[2] ? '  [' + domain[2] + ']' : '') + '\n';
 								}
 							} else {
 								message += '  (none)';
@@ -1520,6 +1556,8 @@
 							b_visible = b_show_handles;
 						} else if (object.userData.obb.type_hint === 'marker') {
 							b_visible = b_show_markers;
+						} else if (object.userData.obb.type_hint === 'modification') {
+							b_visible = b_show_modifications;
 						} else if (object.userData.obb.type_hint === 'mismatch') {
 							b_visible = b_show_mismatches;
 						}

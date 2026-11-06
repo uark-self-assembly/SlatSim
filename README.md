@@ -22,6 +22,23 @@ last step, and drag the step slider. Stepping or playing past the last step simu
 New Steps** is checked. **Binding Threshold** shows the system's threshold; changing it deletes any steps after the
 current step. Keyboard: ←/→ step, Shift+←/→ play, Space play/pause, Home/End first/last step.
 
+## Domain modifications
+
+A domain may name a modification, for example an indirect-labelling tail on its staple:
+`<domain><label>…</label><direction>D</direction><modification>indirect_label_ROX</modification></domain>`.
+The system lists the modifications it uses, with a colour for each, in a top-level section:
+
+```xml
+<modifications>
+  <modification><name>indirect_label_ROX</name><color>red</color></modification>
+  <modification><name>indirect_label_FAM</name><color>limegreen</color></modification>
+</modifications>
+```
+
+Each modified domain gets a small block in its modification's colour at the tip of its handle (magenta if the
+modification has no colour); **Drawing Options → View Modifications** shows or hides them, and the mouse-over
+information names the modification. Saving keeps both.
+
 ## URL options and embedding
 
 These URL parameters set up the page when it loads:
