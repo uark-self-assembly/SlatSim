@@ -40,6 +40,11 @@ its handle tip, so the blocks of two bound modified domains sit one above the ot
 modification has no colour); **Drawing Options → View Modifications** shows or hides them, and the mouse-over
 information names the modification. Saving keeps both.
 
+## Other sections
+
+Top-level elements SlatSim doesn't use itself, such as the `<gadgets>` section shsgen writes (each
+gadget's slat placements) or `<rotation>`, are kept and written back unchanged when a system is saved.
+
 ## URL options and embedding
 
 These URL parameters set up the page when it loads:

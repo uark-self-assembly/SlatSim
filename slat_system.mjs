@@ -47,6 +47,11 @@ class SlatSystem {
 			}
 		}
 
+		// Top-level elements SlatSim doesn't use itself (for example the <gadgets> section shsgen writes, or
+		//   <rotation>) are kept and written back unchanged when the system is saved.
+		this.other_elements = otherElements(xml_node, ['bindingThreshold', 'dim_restrictions', 'DNA_seqs',
+			'marking_domain_label', 'modifications', 'PolyominoTypes', 'seed', 'assembly']);
+
 		const seed_node = xml_node.querySelector("seed");
 		const assembly_node = xml_node.querySelector("assembly");
 
@@ -138,6 +143,7 @@ class SlatSystem {
 		assemblyEle.appendChild(assemblyPolyEle);
 		rootEle.appendChild(assemblyEle);
 
+		appendOtherElements(xmlDoc, rootEle, this.other_elements);
 
 		let xmlString = new XMLSerializer().serializeToString(xmlDoc);
 		return vkbeautify.xml(xmlString);
