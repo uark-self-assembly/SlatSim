@@ -1498,6 +1498,10 @@
 							//console.log(message);
 							writeOutputMessage(message);
 
+							// Outline the object under the mouse in its own shape: as its child, the hitbox also takes its position,
+							//   rotation and scale (a modification block is a unit box scaled to a slab, so a domain-shaped hitbox
+							//   would be scaled to a huge cylinder)
+							hitbox.geometry = intersections[0].object.geometry;
 							intersections[0].object.add(hitbox);
 						}
 					}
